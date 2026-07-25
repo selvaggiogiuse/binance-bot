@@ -1,54 +1,57 @@
-import os, time, threading, requests
+import os
+import time
+import threading
+import requests
 from flask import Flask
 
 app = Flask(__name__)
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT = os.getenv("TELEGRAM_CHAT_ID")
 
-def get_price():
-    urls = [
-        "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
-        "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-    ]
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=10).json()
-            print(f"Risposta {url}: {r}")
-            if "price" in r:
-                return r["price"]
-        except Exception as e:
-            print(f"Errore {url}: {e}")
-    # fallback se Binance non va
-    try:
-        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10).json()
-        return str(r["bitcoin"]["usd"])
-    except Exception as e:
-        print(f"Errore coingecko: {e}")
-        return None
+# --- CONFIG ---
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+SOGLIA = 1.0 # 1% = ti avvisa solo se si muove di almeno 1%
 
-def check_btc():
-    time.sleep(5)
-    print("BOT LOOP PARTITO")
+ultimo_prezzo = None
+
+def get_btc_price():
+    url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+    r = requests.get(url, timeout=10)
+    return float(r.json()["price"])
+
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+
+def bot_loop():
+    global ultimo_prezzo
     while True:
-        price = get_price()
-        print(f"Prezzo preso: {price}")
-        if price and TOKEN and CHAT:
-            msg = f"BTC: ${float(price):,.2f}"
-            requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT}&text={msg}", timeout=10)
-            print(f"Inviato: {msg}")
-        else:
-            print("Non invio: manca price o TOKEN/CHAT")
-        time.sleep(300)
+        try:
+            prezzo = get_btc_price()
+            if ultimo_prezzo is None:
+                send_telegram(f"Bot partito ✅ BTC: {prezzo:.2f}$")
+                ultimo_prezzo = prezzo
+            else:
+                variazione = (prezzo - ultimo_prezzo) / ultimo_prezzo * 100
+                if abs(variazione) >= SOGLIA:
+                    send_telegram(f"BTC: {prezzo:.2f}$ ({variazione:+.2f}%)")
+                    ultimo_prezzo = prezzo
+                else:
+                    print(f"Variazione piccola {variazione:.2f}% - non invio")
+        except Exception as e:
+            print(f"Errore: {e}")
+        
+        time.sleep(900) # controlla ogni 15 min
 
 @app.route("/")
 def home():
-    return "OK"
+    return "Bot is alive"
 
 @app.route("/health")
 def health():
-    return "ok", 200
+    return "ok"
 
-threading.Thread(target=check_btc, daemon=True).start()
+# fa partire il bot in background
+threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
