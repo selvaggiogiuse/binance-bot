@@ -38,7 +38,7 @@ def check_btc():
             print(f"Inviato: {msg}")
         else:
             print("Non invio: manca price o TOKEN/CHAT")
-        time.sleep(60)
+        time.sleep(300)
 
 @app.route("/")
 def home():
