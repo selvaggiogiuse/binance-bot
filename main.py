@@ -6,7 +6,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 SIMBOLI = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-PRE_SOGLIA = 0.5 # pre-allarme
+PRE_SOGLIA = 0.2 # pre-allarme
 SOGLIA = 1.0 # allarme vero
 
 def get_price(symbol):
