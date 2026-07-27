@@ -104,7 +104,7 @@ def loop_bot():
 
             elif abs_var < 0.1:
                 pre_sent[s]=False
-        time.sleep(60)
+        time.sleep(300)
 
 threading.Thread(target=loop_bot, daemon=True).start()
 if __name__ == "__main__":
