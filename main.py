@@ -18,7 +18,7 @@ CHAT_ID = "INSERISCI_QUI_CHAT_ID"
 GIORNI_STORICO = 14  # <-- Cambia qui se vuoi 7 / 30
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"  # FIX per Render USA - risolve errore 451
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 storico_cache = {}
