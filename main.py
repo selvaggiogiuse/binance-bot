@@ -1,251 +1,168 @@
-import os, time, threading, requests
-from flask import Flask
+"""
+CryptoAlertBot V9.1 - VOLUME + STORICO 14 GIORNI
+- Mantiene TUTTE le statistiche della foto (prezzo, %, trend, VOL, RSI)
+- Aggiunge riga storico su 1m e 5m
+- 14 giorni = compromesso ideale tra casi e attualita
+SOLO ALERT, NON FA TRADING
+"""
+
+import time
+import requests
+from statistics import mean
 from datetime import datetime
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN") or ""
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or ""
+# ================= CONFIG =================
+TELEGRAM_TOKEN = "INSERISCI_QUI_IL_TUO_TOKEN"
+CHAT_ID = "INSERISCI_QUI_CHAT_ID"
+
+GIORNI_STORICO = 14  # <-- Cambia qui se vuoi 7 / 30
+
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-app = Flask(__name__)
-LOGS = []
-COUNTER = 0
+storico_cache = {}
+CACHE_TTL = 3600  # aggiorna storico ogni ora
 
-def log_msg(m):
-    t = datetime.now().strftime("%H:%M:%S")
-    s = "[" + t + "] " + m
-    print(s, flush=True)
-    LOGS.append(s)
-    if len(LOGS) > 200:
-        LOGS.pop(0)
-
-def send_tg(txt):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+def get_klines(symbol, interval, limit=1000, end_time=None):
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    if end_time:
+        params["endTime"] = end_time
     try:
-        url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": txt}, timeout=15)
-    except:
-        pass
+        r = requests.get(BINANCE_URL, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"Errore klines {symbol} {interval}: {e}")
+        return []
 
-def get_klines(sym, interval, lim):
-    urls = [
-        "https://data-api.binance.vision/api/v3/klines?symbol=" + sym + "&interval=" + interval + "&limit=" + str(lim),
-        "https://api1.binance.com/api/v3/klines?symbol=" + sym + "&interval=" + interval + "&limit=" + str(lim)
-    ]
-    for u in urls:
-        try:
-            r = requests.get(u, timeout=10).json()
-            if isinstance(r, list) and len(r) >= 10:
-                return r
-        except:
-            pass
-    return []
-
-def get_price_data(sym):
-    try:
-        u = "https://data-api.binance.vision/api/v3/ticker/24hr?symbol=" + sym
-        d = requests.get(u, timeout=10).json()
-        return float(d['lastPrice']), float(d['priceChangePercent'])
-    except:
-        return 0, 0
-
-def get_eur_price(sym):
-    eur_sym = sym.replace("USDT", "EUR")
-    try:
-        u = "https://data-api.binance.vision/api/v3/ticker/price?symbol=" + eur_sym
-        d = requests.get(u, timeout=10).json()
-        return float(d['price'])
-    except:
-        try:
-            u = "https://data-api.binance.vision/api/v3/ticker/price?symbol=EURUSDT"
-            d = requests.get(u, timeout=10).json()
-            eur_usdt = float(d['price'])
-            price_usdt, _ = get_price_data(sym)
-            if eur_usdt > 0:
-                return price_usdt / eur_usdt
-        except:
-            pass
-    p, _ = get_price_data(sym)
-    return p
+def fetch_storico(symbol, interval, giorni=GIORNI_STORICO):
+    cache_key = f"{symbol}_{interval}_{giorni}"
+    now = time.time()
+    if cache_key in storico_cache:
+        data, ts = storico_cache[cache_key]
+        if now - ts < CACHE_TTL:
+            return data
+    
+    print(f"Scarico {giorni}gg per {symbol} {interval}...")
+    tutto = []
+    end_time = int(now*1000)
+    candele_giorno = 1440 if interval == "1m" else 288
+    tot_candele = giorni * candele_giorno
+    iterazioni = tot_candele // 1000 + 2
+    
+    for _ in range(iterazioni):
+        batch = get_klines(symbol, interval, 1000, end_time)
+        if not batch:
+            break
+        tutto = batch + tutto
+        end_time = int(batch[0][0]) - 1
+        time.sleep(0.3)
+    
+    storico_cache[cache_key] = (tutto, now)
+    return tutto
 
 def calc_rsi(klines, period=14):
-    try:
-        closes = []
-        for c in klines:
-            closes.append(float(c[4]))
-        if len(closes) < period + 1:
-            return 50.0
-        gains = 0.0
-        losses = 0.0
-        for i in range(1, period+1):
-            diff = closes[i] - closes[i-1]
-            if diff > 0:
-                gains += diff
-            else:
-                losses -= diff
-        if losses == 0:
-            return 70.0
-        rs = gains / losses if losses != 0 else 0
-        rsi = 100 - (100 / (1 + rs))
-        return round(rsi, 1)
-    except:
+    closes = [float(k[4]) for k in klines]
+    if len(closes) < period+1:
         return 50.0
-
-def get_vol_label(kl):
-    try:
-        if not kl:
-            return "VOL NORMALE"
-        vols = []
-        for c in kl:
-            vols.append(float(c[5]))
-        vn = vols[-1]
-        avg = sum(vols[:-1]) / len(vols[:-1]) if len(vols) > 1 else vn
-        if avg == 0:
-            return "VOL NORMALE"
-        if vn < avg * 0.7:
-            return "VOL BASSO"
-        elif vn > avg * 1.9:
-            return "VOL ALTO"
-        else:
-            return "VOL NORMALE"
-    except:
-        return "VOL NORMALE"
-
-def get_trend(kl):
-    try:
-        closes = []
-        for c in kl:
-            closes.append(float(c[4]))
-        if len(closes) < 6:
-            return "FLAT / STABILE"
-        change_5 = (closes[-1] - closes[-6]) / closes[-6] * 100
-        ema_short = sum(closes[-3:]) / 3
-        ema_long = sum(closes[-6:]) / 6
-        if change_5 > 0.6 and ema_short > ema_long:
-            return "RIALZO"
-        if change_5 > 0.15 and ema_short >= ema_long:
-            return "RIALZO LEGGERO"
-        if change_5 < -0.6 and ema_short < ema_long:
-            return "RIBASSO"
-        if change_5 < -0.15 and ema_short <= ema_long:
-            return "RIBASSO LEGGERO"
-        return "FLAT / STABILE"
-    except:
-        return "FLAT / STABILE"
-
-def get_trend_icon(trend):
-    if "RIALZO" in trend:
-        return "\U0001f4c8 "
-    if "RIBASSO" in trend:
-        return "\U0001f4c9 "
-    return "\u27a1\ufe0f "
+    gains, losses = [], []
+    for i in range(1, period+1):
+        diff = closes[-i] - closes[-i-1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    avg_gain = sum(gains)/period
+    avg_loss = sum(losses)/period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain/avg_loss
+    return 100 - (100/(1+rs))
 
 def get_rsi_label(rsi):
-    if rsi < 30:
-        return "IPERVENDUTO"
-    if rsi < 40:
-        return "SCONTO"
-    if rsi > 70:
-        return "IPERCOMPRATO"
-    if rsi > 65:
-        return "CARO"
+    if rsi < 30: return "IPERVENDUTO"
+    if rsi > 70: return "IPERCOMPRATO"
     return "NEUTRO"
 
-def build_agg_1m():
-    klines_map = {}
-    for s in SYMBOLS:
-        klines_map[s] = get_klines(s, "1m", 30)
+def get_trend(klines):
+    closes = [float(k[4]) for k in klines[-10:]]
+    if len(closes) < 2: return "FLAT / STABILE"
+    var = (closes[-1]-closes[0])/closes[0]*100
+    if var > 0.15: return "RIALZO DEBOLE" if var < 0.5 else "RIALZO"
+    if var < -0.15: return "RIBASSO DEBOLE" if var > -0.5 else "RIBASSO"
+    return "FLAT / STABILE"
 
-    now = datetime.now().strftime("%H:%M:%S")
-    msg = "\u23f1\ufe0f AGGIORNAMENTO 1m - " + now + "\n"
+def get_vol_label(klines):
+    vols = [float(k[5]) for k in klines[-21:]]
+    if len(vols) < 21: return "VOL NORMALE"
+    curr = vols[-1]
+    avg = mean(vols[:-1])
+    if curr < avg*0.5: return "zZ VOL BASSO"
+    if curr > avg*2.0: return "VOL ALTO"
+    return "VOL NORMALE"
 
-    for s in SYMBOLS:
-        price_usdt, ch24 = get_price_data(s)
-        price_eur = get_eur_price(s)
-        kl = klines_map.get(s, [])
-        rsi = calc_rsi(kl)
-        vol = get_vol_label(kl)
-        trend = get_trend(kl)
-        icon = get_trend_icon(trend)
-        rsi_lab = get_rsi_label(rsi)
+def get_storico_stats(klines_lunghi, rsi_now, vol_now, candele_dopo=5, giorni=GIORNI_STORICO, interval="1m"):
+    if len(klines_lunghi) < 200:
+        return f"Storico {giorni}gg: in caricamento..."
+    simili = []
+    for i in range(100, len(klines_lunghi)-candele_dopo-1):
+        finestra = klines_lunghi[i-30:i]
+        rsi_pass = calc_rsi(finestra)
+        vol_pass = get_vol_label(finestra)
+        if abs(rsi_pass - rsi_now) < 3.5 and vol_pass == vol_now:
+            p_ora = float(klines_lunghi[i][4])
+            p_dopo = float(klines_lunghi[i+candele_dopo][4])
+            simili.append((p_dopo-p_ora)/p_ora*100)
+    
+    if len(simili) < 5:
+        return f"Storico {giorni}gg ({len(simili)} casi): dati insufficienti"
+    
+    media = mean(simili)
+    sopra = len([x for x in simili if x>0])
+    minuti_dopo = candele_dopo if interval=="1m" else candele_dopo*5
+    return f"Storico {giorni}gg ({len(simili)} casi simili): {media:+.2f}% medio dopo {minuti_dopo}m | {sopra/len(simili)*100:.0f}% sopra"
 
-        short = s.replace("USDT", "")
-        price_str_us = "{:,.2f}".format(price_eur) + "E"
-
-        # aggiungo volume come vuoi tu
-        vol_icon = "zZ " if "BASSO" in vol else ""
-        line = short + ": " + price_str_us + " (" + ("+" if ch24>=0 else "") + str(round(ch24,2)) + "%) " + icon + trend + " | " + vol_icon + vol + " | RSI " + str(rsi) + " " + rsi_lab + "\n"
-        msg += line
+def genera_messaggio(interval):
+    now_str = datetime.now().strftime("%H:%M:%S")
+    msg = f"⏱️ AGGIORNAMENTO {interval} - {now_str}\n"
+    for sym in SYMBOLS:
+        klines_now = get_klines(sym, interval, 50)
+        if len(klines_now) < 10: continue
+        prezzo = float(klines_now[-1][4])
+        var_pct = (prezzo - float(klines_now[-6][4]))/float(klines_now[-6][4])*100
+        trend = get_trend(klines_now)
+        rsi = calc_rsi(klines_now)
+        rsi_lbl = get_rsi_label(rsi)
+        vol = get_vol_label(klines_now)
+        klines_lunghi = fetch_storico(sym, interval, GIORNI_STORICO)
+        storico_txt = get_storico_stats(klines_lunghi, rsi, vol, 5, GIORNI_STORICO, interval)
+        nome = sym.replace("USDT","")
+        msg += f"{nome}: {prezzo:,.2f}E ({var_pct:+.2f}%) ➡️ {trend} | {vol} | RSI {rsi:.1f} {rsi_lbl}\n"
+        msg += f"  └─ 📊 {storico_txt}\n\n"
     return msg
 
-def build_trend_5m():
-    klines_map = {}
-    for s in SYMBOLS:
-        klines_map[s] = get_klines(s, "5m", 30)
-
-    msg = "\U0001f4ca TREND 5m:\n"
-
-    for s in SYMBOLS:
-        kl = klines_map.get(s, [])
-        try:
-            closes = []
-            for c in kl:
-                closes.append(float(c[4]))
-            if len(closes) >= 6:
-                change_5m = (closes[-1] - closes[-6]) / closes[-6] * 100
-            else:
-                change_5m = 0.0
-        except:
-            change_5m = 0.0
-
-        rsi = calc_rsi(kl)
-        vol = get_vol_label(kl)
-        trend = get_trend(kl)
-        icon = get_trend_icon(trend)
-        rsi_lab = get_rsi_label(rsi)
-        short = s.replace("USDT", "")
-
-        sign = "+" if change_5m >= 0 else ""
-        vol_icon = "zZ " if "BASSO" in vol else ""
-        line = short + ": " + sign + str(round(change_5m,2)) + "% in 5m " + icon + trend + " | " + vol_icon + vol + " | RSI " + str(rsi) + " " + rsi_lab + "\n"
-        msg += line
-
-    return msg
-
-def loop_bot():
-    global COUNTER
-    log_msg("Bot v8 CON VOLUME partito")
-    send_tg("Bot v8 CON VOLUME partito - formato foto + volume")
-
-    while True:
-        try:
-            COUNTER += 1
-            msg1 = build_agg_1m()
-            log_msg("Invio AGG 1m con volume")
-            send_tg(msg1)
-
-            if COUNTER % 5 == 0:
-                time.sleep(2)
-                msg5 = build_trend_5m()
-                log_msg("Invio TREND 5m con volume")
-                send_tg(msg5)
-
-            time.sleep(60)
-        except Exception as e:
-            log_msg("Loop err " + str(e))
-            time.sleep(10)
-
-@app.route("/")
-def home():
-    return "Bot v8 con volume vivo - " + str(len(LOGS)) + " log"
-
-@app.route("/log")
-def show_log():
-    return "<br>".join(LOGS[-200:])
-
-t = threading.Thread(target=loop_bot, daemon=True)
-t.start()
+def send_telegram(text):
+    if "INSERISCI" in TELEGRAM_TOKEN:
+        print(text)
+        print("\n--- TEST MODE ---\n")
+        return
+    try:
+        requests.post(TELEGRAM_URL, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
+    except Exception as e:
+        print(f"Errore Telegram: {e}")
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
+    print(f"CryptoAlertBot V9.1 avviato - STORICO {GIORNI_STORICO}gg per 1m e 5m")
+    last_5m = 0
+    while True:
+        try:
+            msg_1m = genera_messaggio("1m")
+            send_telegram(msg_1m)
+            if time.time() - last_5m >= 300:
+                time.sleep(2)
+                msg_5m = genera_messaggio("5m")
+                send_telegram(msg_5m)
+                last_5m = time.time()
+            time.sleep(60)
+        except Exception as e:
+            print(f"Errore loop: {e}")
+            time.sleep(10)
