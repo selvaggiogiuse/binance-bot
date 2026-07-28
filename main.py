@@ -1,9 +1,9 @@
 """
-CryptoAlertBot V9.1 - VOLUME + STORICO 14 GIORNI
-- Mantiene TUTTE le statistiche della foto (prezzo, %, trend, VOL, RSI)
-- Aggiunge riga storico su 1m e 5m
-- 14 giorni = compromesso ideale tra casi e attualita
-SOLO ALERT, NON FA TRADING
+CryptoAlertBot V9.2 KRAKEN - EURO REALI = TradingView
+- Fonte: Kraken (stessi valori TradingView)
+- Coppie: BTCEUR / ETHEUR / SOLEUR in euro veri
+- Storico 14gg, VOL, RSI, 1m e 5m
+- NESSUN errore 451 su Render
 """
 
 import time
@@ -15,50 +15,106 @@ from datetime import datetime
 TELEGRAM_TOKEN = "INSERISCI_QUI_IL_TUO_TOKEN"
 CHAT_ID = "INSERISCI_QUI_CHAT_ID"
 
-GIORNI_STORICO = 14  # <-- Cambia qui se vuoi 7 / 30
-
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"  # FIX per Render USA - risolve errore 451
+GIORNI_STORICO = 14
+SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR"]  # Euro veri Kraken
+KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 storico_cache = {}
-CACHE_TTL = 3600  # aggiorna storico ogni ora
+CACHE_TTL = 3600
 
-def get_klines(symbol, interval, limit=1000, end_time=None):
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    if end_time:
-        params["endTime"] = end_time
+# Mappatura nomi Kraken (accetta sia XXBTZEUR che BTCEUR)
+KRAKEN_PAIRS = {
+    "BTCEUR": "XXBTZEUR",
+    "ETHEUR": "XETHZEUR", 
+    "SOLEUR": "SOLEUR"
+}
+
+def get_klines_kraken(symbol, interval_str, limit=720):
+    """Prende candele da Kraken. interval_str = '1m' o '5m' """
+    pair = KRAKEN_PAIRS.get(symbol, symbol)
+    interval = 1 if interval_str == "1m" else 5
+    
+    params = {"pair": pair, "interval": interval}
     try:
-        r = requests.get(BINANCE_URL, params=params, timeout=10)
+        r = requests.get(KRAKEN_URL, params=params, timeout=15)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        if data.get("error") and len(data["error"]) > 0:
+            print(f"Errore Kraken {symbol}: {data['error']}")
+            return []
+        # Kraken ritorna dict con chiave nome pair
+        result = data.get("result", {})
+        # la prima chiave che non e' 'last'
+        klines = []
+        for k, v in result.items():
+            if k != "last":
+                klines = v
+                break
+        # Formato Kraken: [time, open, high, low, close, vwap, volume, count]
+        # Convertiamo in formato simile Binance: [time, open, high, low, close, volume]
+        # Per compatibilita con resto del codice
+        converted = []
+        for c in klines:
+            # [0]=time, [1]=open, [2]=high, [3]=low, [4]=close, [6]=volume
+            converted.append([c[0]*1000, c[1], c[2], c[3], c[4], c[6]])
+        return converted[-limit:]
     except Exception as e:
-        print(f"Errore klines {symbol} {interval}: {e}")
+        print(f"Errore klines {symbol} {interval_str}: {e}")
         return []
 
-def fetch_storico(symbol, interval, giorni=GIORNI_STORICO):
-    cache_key = f"{symbol}_{interval}_{giorni}"
+def fetch_storico_kraken(symbol, interval_str, giorni=GIORNI_STORICO):
+    cache_key = f"{symbol}_{interval_str}_{giorni}"
     now = time.time()
     if cache_key in storico_cache:
         data, ts = storico_cache[cache_key]
         if now - ts < CACHE_TTL:
             return data
     
-    print(f"Scarico {giorni}gg per {symbol} {interval}...")
+    print(f"Scarico {giorni}gg Kraken per {symbol} {interval_str}...")
     tutto = []
-    end_time = int(now*1000)
-    candele_giorno = 1440 if interval == "1m" else 288
+    # Kraken da max 720 candele per volta, dobbiamo paginare all'indietro
+    # Usiamo 'since' per andare indietro
+    pair = KRAKEN_PAIRS.get(symbol, symbol)
+    interval = 1 if interval_str == "1m" else 5
+    candele_giorno = 1440 if interval_str == "1m" else 288
     tot_candele = giorni * candele_giorno
-    iterazioni = tot_candele // 1000 + 2
     
-    for _ in range(iterazioni):
-        batch = get_klines(symbol, interval, 1000, end_time)
-        if not batch:
+    # Partiamo da ora e andiamo indietro
+    since = int(now - giorni*24*3600)
+    
+    while len(tutto) < tot_candele:
+        params = {"pair": pair, "interval": interval, "since": since}
+        try:
+            r = requests.get(KRAKEN_URL, params=params, timeout=15)
+            data = r.json()
+            if data.get("error") and len(data["error"]) > 0:
+                break
+            result = data.get("result", {})
+            klines = []
+            last_ts = None
+            for k, v in result.items():
+                if k == "last":
+                    last_ts = v
+                else:
+                    klines = v
+            if not klines:
+                break
+            # converti
+            conv = [[c[0]*1000, c[1], c[2], c[3], c[4], c[6]] for c in klines]
+            tutto.extend(conv)
+            if last_ts is None:
+                break
+            since = int(last_ts)
+            if len(klines) < 100:
+                break
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Errore storico {symbol}: {e}")
             break
-        tutto = batch + tutto
-        end_time = int(batch[0][0]) - 1
-        time.sleep(0.3)
     
+    # ordina per tempo e prendi ultimi tot_candele
+    tutto = sorted(tutto, key=lambda x: x[0])[-tot_candele:]
     storico_cache[cache_key] = (tutto, now)
     return tutto
 
@@ -123,20 +179,21 @@ def get_storico_stats(klines_lunghi, rsi_now, vol_now, candele_dopo=5, giorni=GI
 
 def genera_messaggio(interval):
     now_str = datetime.now().strftime("%H:%M:%S")
-    msg = f"⏱️ AGGIORNAMENTO {interval} - {now_str}\n"
+    msg = f"⏱️ AGGIORNAMENTO {interval} - {now_str} (Kraken EUR)\n"
     for sym in SYMBOLS:
-        klines_now = get_klines(sym, interval, 50)
-        if len(klines_now) < 10: continue
+        klines_now = get_klines_kraken(sym, interval, 50)
+        if len(klines_now) < 10: 
+            continue
         prezzo = float(klines_now[-1][4])
         var_pct = (prezzo - float(klines_now[-6][4]))/float(klines_now[-6][4])*100
         trend = get_trend(klines_now)
         rsi = calc_rsi(klines_now)
         rsi_lbl = get_rsi_label(rsi)
         vol = get_vol_label(klines_now)
-        klines_lunghi = fetch_storico(sym, interval, GIORNI_STORICO)
+        klines_lunghi = fetch_storico_kraken(sym, interval, GIORNI_STORICO)
         storico_txt = get_storico_stats(klines_lunghi, rsi, vol, 5, GIORNI_STORICO, interval)
-        nome = sym.replace("USDT","")
-        msg += f"{nome}: {prezzo:,.2f}E ({var_pct:+.2f}%) ➡️ {trend} | {vol} | RSI {rsi:.1f} {rsi_lbl}\n"
+        nome = sym.replace("EUR","")
+        msg += f"{nome}: {prezzo:,.2f}€ ({var_pct:+.2f}%) ➡️ {trend} | {vol} | RSI {rsi:.1f} {rsi_lbl}\n"
         msg += f"  └─ 📊 {storico_txt}\n\n"
     return msg
 
@@ -151,7 +208,7 @@ def send_telegram(text):
         print(f"Errore Telegram: {e}")
 
 if __name__ == "__main__":
-    print(f"CryptoAlertBot V9.1 avviato - STORICO {GIORNI_STORICO}gg per 1m e 5m")
+    print(f"CryptoAlertBot V9.2 KRAKEN EUR avviato - STORICO {GIORNI_STORICO}gg")
     last_5m = 0
     while True:
         try:
