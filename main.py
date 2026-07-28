@@ -62,4 +62,32 @@ def get_volume_info(symbol, interval=1, lookback=20):
 
         volumes = [float(c[5]) for c in klines]
         vol_now = volumes[-1]
-        vol_avg = sum(volumes
+        vol_avg = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else vol_now
+
+        if vol_avg == 0:
+            return vol_now, vol_avg, "💧 VOL NORMALE"
+
+        if vol_now < vol_avg * 0.7:
+            label = "💤 VOL BASSO"
+        elif vol_now > vol_avg * 1.9:
+            label = "🔥 VOL ALTO"
+        else:
+            label = "💧 VOL NORMALE"
+
+        return vol_now, vol_avg, label
+    except Exception as e:
+        log_msg(f"Vol error {symbol} {interval}m: {e}")
+        return 0, 0, "💧 VOL NORMALE"
+
+def get_price_info(symbol):
+    try:
+        url = f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={symbol}"
+        data = requests.get(url, timeout=10).json()
+        price = float(data['lastPrice'])
+        change = float(data['priceChangePercent'])
+        return price, change
+    except:
+        return 0, 0
+
+def loop_bot():
+    log_msg("Bot KRAKEN v5.3
