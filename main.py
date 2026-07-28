@@ -67,10 +67,10 @@ def send_telegram(msg):
     except: pass
 
 @app.route("/")
-def home(): return "Bot RSI v3 online - 1m status"
+def home(): return "Bot RSI v4 online - 1m + 5m con label"
 @app.route("/test")
 def test():
-    send_telegram("Test Bot v3 ✅ - status ogni minuto")
+    send_telegram("Test Bot v4 ✅ - 1m + 5m con tipo trend")
     return "ok"
 
 def loop_bot():
@@ -79,7 +79,7 @@ def loop_bot():
     rsi_cache = {}
     last_trend_time = time.time()
 
-    txt = "Bot KRAKEN v3 partito ✅\n- Allarmi: 0.2% / 0.5% / 1%\n- Status con TREND+RSI ogni 1m\n- Trend 5m ogni 5m\n"
+    txt = "Bot KRAKEN v4 partito ✅\n- Allarmi: 0.2% / 0.5% / 1%\n- Status 1m: trend+RSI ogni 1m\n- Trend 5m: ora con tipo RIBASSO/FLAT/RIALZO\n"
     for s in SIMBOLI:
         p = get_price(s)
         if p:
@@ -97,32 +97,26 @@ def loop_bot():
             price = get_price(s)
             if not price or s not in last: continue
 
-            # aggiorna RSI ogni 5 min
             if time.time() - last_trend_time >= 290:
                 r = get_rsi(s)
                 if r: rsi_cache[s]=r
 
             var = ((price-last[s])/last[s])*100
-            abs_var = abs(var)
             d = get_display(s)
             rsi = rsi_cache.get(s)
             t_label = trend_label(var)
 
-            # aggiungi riga allo status di ogni minuto
             status_msg += f"{d}: {price:,.2f}€ ({var:+.2f}%) {t_label} | {rsi_text(rsi)}\n"
 
-            # allarmi classici
-            if abs_var >= SOGLIA_FORTE:
+            if abs(var) >= SOGLIA_FORTE:
                 send_telegram(f"🚨🚨 FORTE {d}: {price:,.2f}€ ({var:+.2f}%) {t_label}\n{rsi_text(rsi)}")
                 last[s]=price
-            elif abs_var >= SOGLIA:
+            elif abs(var) >= SOGLIA:
                 send_telegram(f"🚨 ALLARME {d}: {price:,.2f}€ ({var:+.2f}%) {t_label}\n{rsi_text(rsi)}")
                 last[s]=price
 
-        # manda lo status completo di tutte e 3 ogni minuto
         send_telegram(status_msg)
 
-        # trend 5m ogni 5 min
         if time.time() - last_trend_time >= 300:
             msg_trend = "📊 TREND 5m:\n"
             for s in SIMBOLI:
@@ -130,7 +124,8 @@ def loop_bot():
                 if not p: continue
                 p_old = last_5m_price.get(s, p)
                 var5 = ((p - p_old)/p_old)*100 if p_old else 0
-                msg_trend += f"{get_display(s)}: {var5:+.2f}% in 5m | {rsi_text(rsi_cache.get(s))}\n"
+                t_label_5m = trend_label(var5)
+                msg_trend += f"{get_display(s)}: {var5:+.2f}% in 5m {t_label_5m} | {rsi_text(rsi_cache.get(s))}\n"
                 last_5m_price[s]=p
             send_telegram(msg_trend)
             last_trend_time = time.time()
