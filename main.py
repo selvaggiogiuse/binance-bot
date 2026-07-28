@@ -116,4 +116,5 @@ bot_thread = threading.Thread(target=loop_bot, daemon=True)
 bot_thread.start()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
