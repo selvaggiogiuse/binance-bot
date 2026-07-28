@@ -12,8 +12,8 @@ from statistics import mean
 from datetime import datetime
 
 # ================= CONFIG =================
-TELEGRAM_TOKEN = "INSERISCI_QUI_IL_TUO_TOKEN"
-CHAT_ID = "INSERISCI_QUI_CHAT_ID"
+TELEGRAM_TOKEN = "8929501448:AAHOiVkI6EjOVeFpLRLVYRQgxdeBgzctxkY"
+CHAT_ID = "423945798"
 
 GIORNI_STORICO = 14
 SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR"]  # Euro veri Kraken
