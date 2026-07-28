@@ -1,4 +1,4 @@
-import os, time, threading, requests
+        import os, time, threading, requests
 from flask import Flask
 from datetime import datetime
 
@@ -8,6 +8,7 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 app = Flask(__name__)
 LOGS = []
+COUNTER = 0
 
 def log_msg(m):
     t = datetime.now().strftime("%H:%M:%S")
@@ -34,7 +35,7 @@ def get_klines(sym, interval, lim):
     for u in urls:
         try:
             r = requests.get(u, timeout=10).json()
-            if isinstance(r, list) and len(r) >= 15:
+            if isinstance(r, list) and len(r) >= 10:
                 return r
         except:
             pass
@@ -49,7 +50,6 @@ def get_price_data(sym):
         return 0, 0
 
 def get_eur_price(sym):
-    # Prova coppia diretta EUR, altrimenti converte da USDT
     eur_sym = sym.replace("USDT", "EUR")
     try:
         u = "https://data-api.binance.vision/api/v3/ticker/price?symbol=" + eur_sym
@@ -57,7 +57,6 @@ def get_eur_price(sym):
         return float(d['price'])
     except:
         try:
-            # conversione tramite EURUSDT
             u = "https://data-api.binance.vision/api/v3/ticker/price?symbol=EURUSDT"
             d = requests.get(u, timeout=10).json()
             eur_usdt = float(d['price'])
@@ -66,7 +65,6 @@ def get_eur_price(sym):
                 return price_usdt / eur_usdt
         except:
             pass
-    # fallback usa prezzo USDT
     p, _ = get_price_data(sym)
     return p
 
@@ -76,9 +74,9 @@ def calc_rsi(klines, period=14):
         for c in klines:
             closes.append(float(c[4]))
         if len(closes) < period + 1:
-            return 50
-        gains = 0
-        losses = 0
+            return 50.0
+        gains = 0.0
+        losses = 0.0
         for i in range(1, period+1):
             diff = closes[i] - closes[i-1]
             if diff > 0:
@@ -86,16 +84,15 @@ def calc_rsi(klines, period=14):
             else:
                 losses -= diff
         if losses == 0:
-            return 70
+            return 70.0
         rs = gains / losses if losses != 0 else 0
         rsi = 100 - (100 / (1 + rs))
         return round(rsi, 1)
     except:
-        return 50
+        return 50.0
 
-def get_vol_label(sym):
+def get_vol_label(kl):
     try:
-        kl = get_klines(sym, "1m", 21)
         if not kl:
             return "VOL NORMALE"
         vols = []
@@ -114,65 +111,124 @@ def get_vol_label(sym):
     except:
         return "VOL NORMALE"
 
-def get_trend(ch):
-    if ch > 0.5:
-        return "\U0001f4c8 RIALZO"
-    if ch > 0.15:
-        return "\U0001f4c8 RIALZO LEGGERO"
-    if ch < -0.5:
-        return "\U0001f4c9 RIBASSO"
-    if ch < -0.15:
-        return "\U0001f4c9 RIBASSO LEGGERO"
-    return "\u27a1\ufe0f FLAT / STABILE"
+def get_trend(kl):
+    try:
+        closes = []
+        for c in kl:
+            closes.append(float(c[4]))
+        if len(closes) < 6:
+            return "FLAT / STABILE"
+        change_5 = (closes[-1] - closes[-6]) / closes[-6] * 100
+        ema_short = sum(closes[-3:]) / 3
+        ema_long = sum(closes[-6:]) / 6
+        if change_5 > 0.6 and ema_short > ema_long:
+            return "RIALZO"
+        if change_5 > 0.15 and ema_short >= ema_long:
+            return "RIALZO LEGGERO"
+        if change_5 < -0.6 and ema_short < ema_long:
+            return "RIBASSO"
+        if change_5 < -0.15 and ema_short <= ema_long:
+            return "RIBASSO LEGGERO"
+        return "FLAT / STABILE"
+    except:
+        return "FLAT / STABILE"
+
+def get_trend_icon(trend):
+    if "RIALZO" in trend:
+        return "\U0001f4c8 "
+    if "RIBASSO" in trend:
+        return "\U0001f4c9 "
+    return "\u27a1\ufe0f "
 
 def get_rsi_label(rsi):
-    if rsi > 70:
-        return "IPERCOMPRATO"
     if rsi < 30:
         return "IPERVENDUTO"
-    if rsi > 60:
-        return "NEUTRO-RB"
     if rsi < 40:
-        return "NEUTRO-RI"
+        return "SCONTO"
+    if rsi > 70:
+        return "IPERCOMPRATO"
+    if rsi > 65:
+        return "CARO"
     return "NEUTRO"
 
+def build_agg_1m():
+    klines_map = {}
+    for s in SYMBOLS:
+        klines_map[s] = get_klines(s, "1m", 30)
+
+    now = datetime.now().strftime("%H:%M:%S")
+    msg = "\u23f1\ufe0f AGGIORNAMENTO 1m - " + now + "\n"
+
+    for s in SYMBOLS:
+        price_usdt, ch24 = get_price_data(s)
+        price_eur = get_eur_price(s)
+        kl = klines_map.get(s, [])
+        rsi = calc_rsi(kl)
+        vol = get_vol_label(kl)
+        trend = get_trend(kl)
+        icon = get_trend_icon(trend)
+        rsi_lab = get_rsi_label(rsi)
+
+        short = s.replace("USDT", "")
+        price_str_us = "{:,.2f}".format(price_eur) + "E"
+
+        # aggiungo volume come vuoi tu
+        vol_icon = "zZ " if "BASSO" in vol else ""
+        line = short + ": " + price_str_us + " (" + ("+" if ch24>=0 else "") + str(round(ch24,2)) + "%) " + icon + trend + " | " + vol_icon + vol + " | RSI " + str(rsi) + " " + rsi_lab + "\n"
+        msg += line
+    return msg
+
+def build_trend_5m():
+    klines_map = {}
+    for s in SYMBOLS:
+        klines_map[s] = get_klines(s, "5m", 30)
+
+    msg = "\U0001f4ca TREND 5m:\n"
+
+    for s in SYMBOLS:
+        kl = klines_map.get(s, [])
+        try:
+            closes = []
+            for c in kl:
+                closes.append(float(c[4]))
+            if len(closes) >= 6:
+                change_5m = (closes[-1] - closes[-6]) / closes[-6] * 100
+            else:
+                change_5m = 0.0
+        except:
+            change_5m = 0.0
+
+        rsi = calc_rsi(kl)
+        vol = get_vol_label(kl)
+        trend = get_trend(kl)
+        icon = get_trend_icon(trend)
+        rsi_lab = get_rsi_label(rsi)
+        short = s.replace("USDT", "")
+
+        sign = "+" if change_5m >= 0 else ""
+        vol_icon = "zZ " if "BASSO" in vol else ""
+        line = short + ": " + sign + str(round(change_5m,2)) + "% in 5m " + icon + trend + " | " + vol_icon + vol + " | RSI " + str(rsi) + " " + rsi_lab + "\n"
+        msg += line
+
+    return msg
+
 def loop_bot():
-    log_msg("Bot v6 BELLO partito - formato Matrice")
-    send_tg("Bot KRAKEN v6 BELLO partito - formato come seconda foto, con fix VOL BASSO")
+    global COUNTER
+    log_msg("Bot v8 CON VOLUME partito")
+    send_tg("Bot v8 CON VOLUME partito - formato foto + volume")
 
     while True:
         try:
-            klines_map = {}
-            for s in SYMBOLS:
-                klines_map[s] = get_klines(s, "1m", 30)
+            COUNTER += 1
+            msg1 = build_agg_1m()
+            log_msg("Invio AGG 1m con volume")
+            send_tg(msg1)
 
-            now = datetime.now().strftime("%H:%M:%S")
-            msg = "\u23f1\ufe0f AGG 1m - " + now + "\n"
-
-            for s in SYMBOLS:
-                price_usdt, ch = get_price_data(s)
-                price_eur = get_eur_price(s)
-                kl = klines_map.get(s, [])
-                rsi = calc_rsi(kl)
-                vol = get_vol_label(s)
-                trend = get_trend(ch)
-                rsi_lab = get_rsi_label(rsi)
-
-                # nome corto BTC ETH SOL
-                short = s.replace("USDT", "")
-                # formato con punto migliaia e virgola euro come seconda foto
-                price_str = "{:,.2f}".format(price_eur).replace(",", "X").replace(".", ",").replace("X", ".") + "E"
-
-                # zZ per vol basso
-                vol_icon = "\U0001f4a4 " if "BASSO" in vol else ""
-                if "BASSO" in vol:
-                    vol_icon = "zZ "
-
-                line = short + ": " + price_str + " (" + ("+" if ch>=0 else "") + str(round(ch,2)) + "%) " + trend + " | " + vol_icon + vol + " | RSI " + str(rsi) + " " + rsi_lab + "\n"
-                msg += line
-
-            log_msg("Invio AGG raggruppato")
-            send_tg(msg)
+            if COUNTER % 5 == 0:
+                time.sleep(2)
+                msg5 = build_trend_5m()
+                log_msg("Invio TREND 5m con volume")
+                send_tg(msg5)
 
             time.sleep(60)
         except Exception as e:
@@ -181,7 +237,7 @@ def loop_bot():
 
 @app.route("/")
 def home():
-    return "Bot v6 bello vivo - " + str(len(LOGS)) + " log"
+    return "Bot v8 con volume vivo - " + str(len(LOGS)) + " log"
 
 @app.route("/log")
 def show_log():
