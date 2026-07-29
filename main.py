@@ -16,6 +16,10 @@ app = Flask(__name__)
 def home():
     return "Bot Kraken EUR 14gg is running - OK"
 
+@app.route('/health')
+def health():
+    return "OK", 200
+
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
@@ -192,7 +196,28 @@ def get_storico_stats(klines_lunghi, rsi_now, vol_now, candele_dopo=5, giorni=GI
     media = mean(simili)
     sopra = len([x for x in simili if x>0])
     minuti_dopo = candele_dopo if interval=="1m" else candele_dopo*5
-    return f"Storico {giorni}gg ({len(simili)} casi simili): {media:+.2f}% medio dopo {minuti_dopo}m | {sopra/len(simili)*100:.0f}% sopra"
+
+    # NUOVO: percentuali UP / DOWN / FLAT mantenendo il vecchio
+    up = len([x for x in simili if x > 0.05])
+    down = len([x for x in simili if x < -0.05])
+    flat = len(simili) - up - down
+    pct_up = up/len(simili)*100
+    pct_down = down/len(simili)*100
+    pct_flat = flat/len(simili)*100
+
+    if pct_up >= 60:
+        segnale = "📈 SALE"
+    elif pct_down >= 60:
+        segnale = "📉 SCENDE"
+    elif pct_flat >= 50:
+        segnale = "➡️ FLAT"
+    else:
+        segnale = "🔀 INCERTO"
+
+    # Mantiene tutto il vecchio + aggiunge le nuove percentuali
+    base = f"Storico {giorni}gg ({len(simili)} casi simili): {media:+.2f}% medio dopo {minuti_dopo}m | {sopra/len(simili)*100:.0f}% sopra"
+    extra = f" | {segnale} {pct_up:.0f}%↑ {pct_down:.0f}%↓ {pct_flat:.0f}%→"
+    return base + extra
 
 def genera_messaggio(interval):
     now_str = datetime.now().strftime("%H:%M:%S")
