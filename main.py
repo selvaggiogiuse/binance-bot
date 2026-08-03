@@ -1,3 +1,4 @@
+
 import os
 import time
 import threading
@@ -5,6 +6,11 @@ import requests
 from flask import Flask
 from datetime import datetime, timedelta
 from statistics import mean
+try:
+    from zoneinfo import ZoneInfo
+    TZ_ITALY = ZoneInfo("Europe/Rome")
+except:
+    TZ_ITALY = None
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or "8929501488:AAHOiVk16EjOVefpLRLVYRQgxdeBgzctxkY"
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or "423945798"
@@ -12,7 +18,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or "423945798"
 SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR"]
 KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
 KRAKEN_PAIRS = {"BTCEUR": "XXBTZEUR", "ETHEUR": "XETHZEUR", "SOLEUR": "SOLEUR"}
-GIORNI_STORICO = 30 # V10: più storico = più casi
+GIORNI_STORICO = 30
 MIN_CASI = 25
 
 app = Flask(__name__)
@@ -21,12 +27,18 @@ bot_thread = None
 storico_cache = {}
 CACHE_TTL = 3600
 
+def now_italy():
+    if TZ_ITALY:
+        return datetime.now(TZ_ITALY)
+    return datetime.now()
+
 def log_msg(msg):
-    t = datetime.now().strftime("%H:%M:%S")
+    t = now_italy().strftime("%H:%M:%S")
     entry = f"[{t}] {msg}"
     print(entry, flush=True)
     LOGS.append(entry)
-    if len(LOGS) > 500: LOGS.pop(0)
+    if len(LOGS) > 500:
+        LOGS.pop(0)
 
 def send_telegram(text):
     try:
@@ -44,11 +56,14 @@ def get_klines_kraken(symbol, interval_str, limit=80):
     try:
         r = requests.get(KRAKEN_URL, params={"pair": pair, "interval": interval}, timeout=15)
         data = r.json()
-        if data.get("error") and len(data["error"]) > 0: return []
+        if data.get("error") and len(data["error"]) > 0:
+            return []
         result = data.get("result", {})
         klines = []
         for k, v in result.items():
-            if k!= "last": klines = v; break
+            if k != "last":
+                klines = v
+                break
         conv = [[c[0]*1000, c[1], c[2], c[3], c[4], c[6]] for c in klines]
         return conv[-limit:]
     except Exception as e:
@@ -60,7 +75,8 @@ def fetch_storico_kraken(symbol, interval_str, giorni=GIORNI_STORICO):
     now = time.time()
     if cache_key in storico_cache:
         data, ts = storico_cache[cache_key]
-        if now - ts < CACHE_TTL: return data
+        if now - ts < CACHE_TTL:
+            return data
     log_msg(f"Scarico {giorni}gg {symbol} {interval_str}...")
     pair = KRAKEN_PAIRS.get(symbol, symbol)
     interval = 1 if interval_str == "1m" else 5
@@ -69,24 +85,33 @@ def fetch_storico_kraken(symbol, interval_str, giorni=GIORNI_STORICO):
     tutto = []
     since = int(now - giorni*24*3600)
     while len(tutto) < tot_candele:
+        params = {"pair": pair, "interval": interval, "since": since}
         try:
-            r = requests.get(KRAKEN_URL, params={"pair": pair, "interval": interval, "since": since}, timeout=20)
+            r = requests.get(KRAKEN_URL, params=params, timeout=20)
             data = r.json()
-            if data.get("error") and len(data["error"]) > 0: break
+            if data.get("error") and len(data["error"]) > 0:
+                break
             result = data.get("result", {})
-            klines = []; last_ts = None
+            klines = []
+            last_ts = None
             for k, v in result.items():
-                if k == "last": last_ts = v
-                else: klines = v
-            if not klines: break
+                if k == "last":
+                    last_ts = v
+                else:
+                    klines = v
+            if not klines:
+                break
             conv = [[c[0]*1000, c[1], c[2], c[3], c[4], c[6]] for c in klines]
             tutto.extend(conv)
-            if last_ts is None: break
+            if last_ts is None:
+                break
             since = int(last_ts)
-            if len(klines) < 100: break
+            if len(klines) < 100:
+                break
             time.sleep(0.3)
         except Exception as e:
-            log_msg(f"Err storico {symbol}: {e}"); break
+            log_msg(f"Err storico {symbol}: {e}")
+            break
     tutto = sorted(tutto, key=lambda x: x[0])[-tot_candele:]
     storico_cache[cache_key] = (tutto, now)
     log_msg(f"Storico {symbol} {interval_str} caricato: {len(tutto)}")
@@ -95,24 +120,33 @@ def fetch_storico_kraken(symbol, interval_str, giorni=GIORNI_STORICO):
 def calc_rsi(klines, period=14):
     try:
         closes = [float(k[4]) for k in klines]
-        if len(closes) < period+1: return 50.0
-        gains=[]; losses=[]
+        if len(closes) < period+1:
+            return 50.0
+        gains = []
+        losses = []
         for i in range(1, period+1):
             diff = closes[-i] - closes[-i-1]
-            gains.append(max(diff,0)); losses.append(max(-diff,0))
-        avg_g=sum(gains)/period; avg_l=sum(losses)/period
-        if avg_l==0: return 100.0
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+        avg_g = sum(gains)/period
+        avg_l = sum(losses)/period
+        if avg_l == 0:
+            return 100.0
         return 100 - (100/(1+avg_g/avg_l))
-    except: return 50.0
+    except:
+        return 50.0
 
 def calc_ema(closes, period):
     try:
-        if len(closes)<period: return mean(closes) if closes else 0
-        k=2/(period+1)
-        ema=mean(closes[:period])
-        for price in closes[period:]: ema=price*k + ema*(1-k)
+        if len(closes) < period:
+            return mean(closes) if closes else 0
+        k = 2/(period+1)
+        ema = mean(closes[:period])
+        for price in closes[period:]:
+            ema = price*k + ema*(1-k)
         return ema
-    except: return closes[-1] if closes else 0
+    except:
+        return closes[-1] if closes else 0
 
 def calc_atr(klines, period=14):
     try:
@@ -121,7 +155,8 @@ def calc_atr(klines, period=14):
             high=float(klines[i][2]); low=float(klines[i][3]); prev=float(klines[i-1][4])
             trs.append(max(high-low, abs(high-prev), abs(low-prev)))
         return mean(trs[-period:]) if len(trs)>=period else mean(trs) if trs else 0
-    except: return 0
+    except:
+        return 0
 
 def get_rsi_label(rsi):
     if rsi<30: return "IPERVENDUTO"
@@ -220,8 +255,9 @@ def get_storico_stats(klines_lunghi, rsi_now, vol_now, candele_dopo=5, giorni=GI
     return base+" | "+extra
 
 def genera_messaggio(interval):
-    now_str=datetime.now().strftime("%H:%M:%S")
-    msg=f"AGG {interval} - {now_str} (Kraken EUR) [V10]\n"
+    now_str = now_italy().strftime("%H:%M:%S")
+    msg=f"AGG {interval} - {now_str} (Kraken EUR) [V10]
+"
     for sym in SYMBOLS:
         klines=get_klines_kraken(sym, interval, 80)
         if len(klines)<50: continue
@@ -247,22 +283,22 @@ def genera_messaggio(interval):
     return msg
 
 def loop_bot():
-    log_msg("Bot V10 PRECISIONE avviato - 30gg...")
+    log_msg("Bot V10 PRECISIONE ITALY avviato - 30gg...")
     for sym in SYMBOLS:
         fetch_storico_kraken(sym, "1m", GIORNI_STORICO)
         fetch_storico_kraken(sym, "5m", GIORNI_STORICO)
     log_msg("Storico caricato")
-    send_telegram("Bot V10 PRECISIONE partito! 30gg | EMA + ATR dinamico + min 25 casi + doppia conferma 1m/5m | Conf A/B/C")
+    send_telegram("Bot V10 ITALY partito! Ora italiana + EMA + ATR + min 25 casi | Conf A/B/C")
     ultimo_5m=-1
     def aspetta():
-        ora=datetime.now()
+        ora=now_italy()
         prossimo=(ora+timedelta(minutes=1)).replace(second=5, microsecond=0)
         attesa=(prossimo-ora).total_seconds()
         if attesa>0: time.sleep(attesa)
     while True:
         try:
             aspetta()
-            ora=datetime.now()
+            ora=now_italy()
             m1=genera_messaggio("1m")
             send_telegram(m1)
             log_msg(f"[1m] Inviato {ora.strftime('%H:%M:%S')}")
