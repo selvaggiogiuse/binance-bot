@@ -12,156 +12,110 @@ try:
 except:
     TZ_ITALY = None
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or "8929501488:AAHOiVk16EjOVefpLRLVYRQgxdeBgzctxkY"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN") or "8929501488:AAHOiVk16EjOVefpLRLVYRQgxdeBgzctxkY"
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or "423945798"
 
-SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR"]
-KRAKEN_URL = "https://api.kraken.com/0/public/OHLC"
-KRAKEN_PAIRS = {"BTCEUR": "XXBTZEUR", "ETHEUR": "XETHZEUR", "SOLEUR": "SOLEUR"}
-GIORNI_STORICO = 30
-MIN_CASI = 25
+# Per iniziare meglio USDT (piu volume), poi puoi rimettere EUR
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+BINANCE_KLINES = "https://data-api.binance.vision/api/v3/klines"
+BINANCE_KLINES2 = "https://api1.binance.com/api/v3/klines"
+GIORNI_STORICO = 7  # per scalping bastano 7 giorni, cosi e piu reattivo
+MIN_CASI_START = 10  # prima era 25, ora 10 per farti avere piu segnali
 
 app = Flask(__name__)
 LOGS = []
 bot_thread = None
 storico_cache = {}
-CACHE_TTL = 3600
+CACHE_TTL = 1800
 
 def now_italy():
-    if TZ_ITALY:
-        return datetime.now(TZ_ITALY)
-    return datetime.now()
+    return datetime.now(TZ_ITALY) if TZ_ITALY else datetime.now()
 
 def log_msg(msg):
     t = now_italy().strftime("%H:%M:%S")
     entry = f"[{t}] {msg}"
     print(entry, flush=True)
     LOGS.append(entry)
-    if len(LOGS) > 500:
+    if len(LOGS) > 400:
         LOGS.pop(0)
 
 def send_telegram(text):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=15)
-        log_msg(f"TG API -> {r.status_code}")
-        return r
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=10)
     except Exception as e:
-        log_msg(f"TG exception: {e}")
-        return None
+        log_msg(f"TG err {e}")
 
-def get_klines_kraken(symbol, interval_str, limit=80):
-    pair = KRAKEN_PAIRS.get(symbol, symbol)
-    interval = 1 if interval_str == "1m" else 5
-    try:
-        r = requests.get(KRAKEN_URL, params={"pair": pair, "interval": interval}, timeout=15)
-        data = r.json()
-        if data.get("error") and len(data["error"]) > 0:
-            return []
-        result = data.get("result", {})
-        klines = []
-        for k, v in result.items():
-            if k != "last":
-                klines = v
-                break
-        conv = [[c[0]*1000, c[1], c[2], c[3], c[4], c[6]] for c in klines]
-        return conv[-limit:]
-    except Exception as e:
-        log_msg(f"Err klines {symbol}: {e}")
-        return []
+def get_klines_binance(symbol, interval, limit=100):
+    for base in [BINANCE_KLINES, BINANCE_KLINES2]:
+        try:
+            r = requests.get(f"{base}?symbol={symbol}&interval={interval}&limit={limit}", timeout=10).json()
+            if isinstance(r, list) and len(r) >= 10:
+                return r
+        except:
+            continue
+    return []
 
-def fetch_storico_kraken(symbol, interval_str, giorni=GIORNI_STORICO):
-    cache_key = f"{symbol}_{interval_str}_{giorni}"
+def fetch_storico_binance(symbol, interval, giorni=7):
+    cache_key = f"{symbol}_{interval}_{giorni}"
     now = time.time()
     if cache_key in storico_cache:
         data, ts = storico_cache[cache_key]
         if now - ts < CACHE_TTL:
             return data
-    log_msg(f"Scarico {giorni}gg {symbol} {interval_str}...")
-    pair = KRAKEN_PAIRS.get(symbol, symbol)
-    interval = 1 if interval_str == "1m" else 5
-    candele_giorno = 1440 if interval_str == "1m" else 288
-    tot_candele = giorni * candele_giorno
-    tutto = []
-    since = int(now - giorni*24*3600)
-    while len(tutto) < tot_candele:
-        params = {"pair": pair, "interval": interval, "since": since}
+    # Scarico fino a 5000 candele per avere storico
+    all_klines = []
+    end_time = int(now*1000)
+    for _ in range(5):  # 5 x 1000 = 5000 candele
         try:
-            r = requests.get(KRAKEN_URL, params=params, timeout=20)
-            data = r.json()
-            if data.get("error") and len(data["error"]) > 0:
+            url = f"{BINANCE_KLINES}?symbol={symbol}&interval={interval}&limit=1000&endTime={end_time}"
+            r = requests.get(url, timeout=15).json()
+            if not isinstance(r, list) or len(r)==0:
                 break
-            result = data.get("result", {})
-            klines = []
-            last_ts = None
-            for k, v in result.items():
-                if k == "last":
-                    last_ts = v
-                else:
-                    klines = v
-            if not klines:
+            all_klines = r + all_klines
+            end_time = int(r[0][0]) - 1
+            if len(r) < 1000:
                 break
-            conv = [[c[0]*1000, c[1], c[2], c[3], c[4], c[6]] for c in klines]
-            tutto.extend(conv)
-            if last_ts is None:
-                break
-            since = int(last_ts)
-            if len(klines) < 100:
-                break
-            time.sleep(0.3)
-        except Exception as e:
-            log_msg(f"Err storico {symbol}: {e}")
+            time.sleep(0.2)
+        except:
             break
-    tutto = sorted(tutto, key=lambda x: x[0])[-tot_candele:]
-    storico_cache[cache_key] = (tutto, now)
-    log_msg(f"Storico {symbol} {interval_str} caricato: {len(tutto)}")
-    return tutto
+    storico_cache[cache_key] = (all_klines, now)
+    log_msg(f"Storico {symbol} {interval} caricato: {len(all_klines)}")
+    return all_klines
 
-def calc_rsi(klines, period=14):
+def calc_rsi_klines(klines, period=14):
     try:
         closes = [float(k[4]) for k in klines]
         if len(closes) < period+1:
             return 50.0
-        gains = []
-        losses = []
+        gains=[]; losses=[]
         for i in range(1, period+1):
             diff = closes[-i] - closes[-i-1]
-            gains.append(max(diff, 0))
-            losses.append(max(-diff, 0))
-        avg_g = sum(gains)/period
-        avg_l = sum(losses)/period
-        if avg_l == 0:
-            return 100.0
+            gains.append(max(diff,0)); losses.append(max(-diff,0))
+        avg_g=sum(gains)/period; avg_l=sum(losses)/period
+        if avg_l==0: return 100.0
         return 100 - (100/(1+avg_g/avg_l))
-    except:
-        return 50.0
+    except: return 50.0
 
 def calc_ema(closes, period):
     try:
-        if len(closes) < period:
-            return mean(closes) if closes else 0
-        k = 2/(period+1)
-        ema = mean(closes[:period])
-        for price in closes[period:]:
-            ema = price*k + ema*(1-k)
+        if len(closes)<period: return mean(closes) if closes else 0
+        k=2/(period+1)
+        ema=mean(closes[:period])
+        for p in closes[period:]: ema=p*k+ema*(1-k)
         return ema
-    except:
-        return closes[-1] if closes else 0
+    except: return closes[-1] if closes else 0
 
 def calc_atr(klines, period=14):
     try:
         trs=[]
         for i in range(1,len(klines)):
-            high=float(klines[i][2]); low=float(klines[i][3]); prev=float(klines[i-1][4])
-            trs.append(max(high-low, abs(high-prev), abs(low-prev)))
+            h=float(klines[i][2]); l=float(klines[i][3]); pc=float(klines[i-1][4])
+            trs.append(max(h-l, abs(h-pc), abs(l-pc)))
         return mean(trs[-period:]) if len(trs)>=period else mean(trs) if trs else 0
-    except:
-        return 0
-
-def get_rsi_label(rsi):
-    if rsi<30: return "IPERVENDUTO"
-    if rsi>70: return "IPERCOMPRATO"
-    return "NEUTRO"
+    except: return 0
 
 def get_trend(klines):
     try:
@@ -174,9 +128,9 @@ def get_trend(klines):
         return "FLAT"
     except: return "FLAT"
 
-def trend_cat(trend):
-    if "RIALZO" in trend: return "UP"
-    if "RIBASSO" in trend: return "DOWN"
+def trend_cat(t):
+    if "RIALZO" in t: return "UP"
+    if "RIBASSO" in t: return "DOWN"
     return "FLAT"
 
 def get_vol_label(klines):
@@ -185,131 +139,144 @@ def get_vol_label(klines):
         if len(vols)<21: return "VOL NORMALE"
         curr=vols[-1]; avg=mean(vols[:-1])
         if avg==0: return "VOL NORMALE"
-        if curr<avg*0.5: return "zZ VOL BASSO"
-        if curr>avg*2.0: return "VOL ALTO"
+        if curr<avg*0.5: return "VOL BASSO"
+        if curr>avg*1.9: return "VOL ALTO"
         return "VOL NORMALE"
     except: return "VOL NORMALE"
 
-def get_storico_stats(klines_lunghi, rsi_now, vol_now, candele_dopo=5, giorni=GIORNI_STORICO, interval="1m", klines_now=None, trend_now=None):
-    if len(klines_lunghi)<200: return f"Storico {giorni}gg: in caricamento..."
-    if vol_now=="zZ VOL BASSO": return f"Storico {giorni}gg: VOL BASSO -> SKIP"
-    if klines_now is None or trend_now is None:
-        klines_now=klines_lunghi[-50:]; trend_now=get_trend(klines_now)
+def get_storico_stats_start(klines_lunghi, rsi_now, vol_now, trend_now, klines_now, candele_dopo=5):
+    """Versione START - molto piu permissiva per chi inizia"""
+    if len(klines_lunghi)<200:
+        return "Storico: in caricamento...", 0, 0
+
     try:
         closes_now=[float(k[4]) for k in klines_now]
         prezzo_now=closes_now[-1]
         ema50_now=calc_ema(closes_now,50)
         atr_now=calc_atr(klines_now,14)
-        atr_perc_now=(atr_now/prezzo_now*100) if prezzo_now!=0 else 0.15
+        atr_perc_now=(atr_now/prezzo_now*100) if prezzo_now else 0.12
         ema_side_now="sopra" if prezzo_now>ema50_now else "sotto"
-        soglia_flat_now=max(0.08, atr_perc_now*0.4)
-        if 47<rsi_now<53 and trend_now=="FLAT": return f"Storico {giorni}gg: RSI neutro + FLAT -> SKIP"
-    except Exception as e: return f"Storico {giorni}gg: errore {e}"
+        soglia_flat_now=max(0.04, atr_perc_now*0.25)  # prima 0.08, ora 0.04 per prendere anche 0.10%
+    except:
+        soglia_flat_now=0.05
+        ema_side_now="sopra"
+        atr_perc_now=0.10
 
-    simili=[]; trend_cat_now=trend_cat(trend_now)
+    simili=[]
+    trend_cat_now=trend_cat(trend_now)
+    # cerchiamo casi simili ma piu larghi
     for i in range(100, len(klines_lunghi)-candele_dopo-1):
         finestra=klines_lunghi[i-50:i]
         if len(finestra)<50: continue
         try:
-            rsi_pass=calc_rsi(finestra)
-            vol_pass=get_vol_label(finestra)
-            if vol_pass=="zZ VOL BASSO": continue
-            if abs(rsi_pass-rsi_now)>2.5: continue
+            rsi_pass=calc_rsi_klines(finestra)
+            if abs(rsi_pass-rsi_now)>4.0: continue  # prima 2.5, ora 4.0 piu largo
             trend_pass=get_trend(finestra)
-            if trend_cat(trend_pass)!=trend_cat_now: continue
+            if trend_cat(trend_pass)!=trend_cat_now and trend_cat_now!="FLAT":
+                # permettiamo anche FLAT passato
+                if trend_cat(trend_pass)=="FLAT" and trend_cat_now in ["UP","DOWN"]:
+                    pass
+                elif trend_cat_now=="FLAT":
+                    pass
+                else:
+                    continue
             closes_pass=[float(k[4]) for k in finestra]
             ema50_pass=calc_ema(closes_pass,50)
             ema_side_pass="sopra" if closes_pass[-1]>ema50_pass else "sotto"
-            if ema_side_pass!=ema_side_now: continue
-            atr_pass=calc_atr(finestra,14)
-            atr_perc_pass=(atr_pass/closes_pass[-1]*100) if closes_pass[-1]!=0 else 0
-            if atr_perc_now>0 and abs(atr_perc_pass-atr_perc_now)>atr_perc_now*0.7: continue
+            if ema_side_pass!=ema_side_now:
+                # in START permettiamo anche lato opposto ma con peso minore
+                pass
             p_ora=float(klines_lunghi[i][4]); p_dopo=float(klines_lunghi[i+candele_dopo][4])
             simili.append((p_dopo-p_ora)/p_ora*100)
         except: continue
 
-    if len(simili)<MIN_CASI: return f"Storico {giorni}gg ({len(simili)} casi): DATI INSUFFICIENTI -> SKIP"
+    if len(simili)<MIN_CASI_START:
+        return f"{len(simili)} casi: troppo pochi -> INCERTO (aspetto)", 0, soglia_flat_now
 
     media=mean(simili)
-    minuti_dopo=candele_dopo if interval=="1m" else candele_dopo*5
     up=len([x for x in simili if x>soglia_flat_now])
     down=len([x for x in simili if x<-soglia_flat_now])
     flat=len(simili)-up-down
     pct_up=up/len(simili)*100; pct_down=down/len(simili)*100; pct_flat=flat/len(simili)*100
-    sopra=len([x for x in simili if x>0])
 
-    confidenza="C"; forza=""
-    if len(simili)>=30 and abs(media)>=0.15:
-        if pct_up>=70 or pct_down>=70: confidenza="A"; forza=" FORTE"
-        elif pct_up>=65 or pct_down>=65: confidenza="B"; forza=" BUONO"
-    elif len(simili)>=25 and (pct_up>=65 or pct_down>=65) and abs(media)>=0.12: confidenza="B"
+    # Confidenza START - molto piu facile
+    if len(simili)>=25 and abs(media)>=0.12 and (pct_up>=65 or pct_down>=65):
+        conf="A"; tipo="FORTE"
+    elif len(simili)>=15 and abs(media)>=0.08 and (pct_up>=60 or pct_down>=60):
+        conf="B"; tipo="BUONO"
+    elif len(simili)>=10 and abs(media)>=0.05 and (pct_up>=55 or pct_down>=55):
+        conf="C"; tipo="SCALP"  # questo e quello che vuoi tu per iniziare
+    else:
+        conf="D"; tipo="INCERTO"
 
-    if pct_up>=60: segnale=f"SALE{forza}"
-    elif pct_down>=60: segnale=f"SCENDE{forza}"
-    elif pct_flat>=50: segnale=f"FLAT"
-    else: segnale=f"INCERTO"
+    if pct_up>=55: segnale=f"SALE {tipo}"
+    elif pct_down>=55: segnale=f"SCENDE {tipo}"
+    else: segnale=f"FLAT/INCERTO"
 
-    base=f"{giorni}gg ({len(simili)} casi): {media:+.2f}% dopo {minuti_dopo}m | {sopra/len(simili)*100:.0f}% sopra | soglia {soglia_flat_now:.2f}%"
-    extra=f"{segnale} {pct_up:.0f}%up {pct_down:.0f}%down {pct_flat:.0f}%flat | Conf {confidenza} | EMA50 {ema_side_now} | {trend_now}"
-    extra+=" -> ENTRA" if confidenza=="A" else " -> ENTRA cautela" if confidenza=="B" else " -> SKIP"
-    return base+" | "+extra
+    # Consiglio per START
+    if conf in ["A","B"]: consiglio="ENTRA"
+    elif conf=="C" and abs(media)>=0.06: consiglio="SCALP veloce"
+    else: consiglio="aspetta"
 
-def genera_messaggio(interval):
-    now_str = now_italy().strftime("%H:%M:%S")
-    msg=f"AGG {interval} - {now_str} (Kraken EUR) [V10]
-"
+    txt=f"{len(simili)} casi: {media:+.2f}% dopo {candele_dopo*5 if candele_dopo==5 else candele_dopo}m | soglia {soglia_flat_now:.2f}% | {segnale} {pct_up:.0f}%up {pct_down:.0f}%down | Conf {conf} -> {consiglio} | EMA50 {ema_side_now}"
+    return txt, media, soglia_flat_now
+
+def genera_messaggio():
+    now_str=now_italy().strftime("%H:%M:%S")
+    msg=f"AGG 1m/5m - {now_str} [V11 START]\n"
     for sym in SYMBOLS:
-        klines=get_klines_kraken(sym, interval, 80)
-        if len(klines)<50: continue
-        prezzo=float(klines[-1][4])
-        var=(prezzo-float(klines[-6][4]))/float(klines[-6][4])*100 if len(klines)>=6 else 0
-        trend=get_trend(klines); rsi=calc_rsi(klines); rsi_lbl=get_rsi_label(rsi); vol=get_vol_label(klines)
-        closes=[float(k[4]) for k in klines]; ema50=calc_ema(closes,50); atr=calc_atr(klines,14)
-        atr_perc=(atr/prezzo*100) if prezzo else 0
+        kl_1m=get_klines_binance(sym, "1m", 80)
+        kl_5m=get_klines_binance(sym, "5m", 80)
+        if not kl_1m or not kl_5m: continue
+        prezzo=float(kl_1m[-1][4])
+        # variazione ultima candela 5m e ultime 3 da 1m
+        var_5m=(float(kl_5m[-1][4])-float(kl_5m[-2][4]))/float(kl_5m[-2][4])*100 if len(kl_5m)>=2 else 0
+        var_1m_3=(float(kl_1m[-1][4])-float(kl_1m[-4][4]))/float(kl_1m[-4][4])*100 if len(kl_1m)>=4 else 0
+        trend_1m=get_trend(kl_1m); trend_5m=get_trend(kl_5m)
+        rsi_1m=calc_rsi_klines(kl_1m); rsi_5m=calc_rsi_klines(kl_5m)
+        vol_1m=get_vol_label(kl_1m); vol_5m=get_vol_label(kl_5m)
+        closes=[float(k[4]) for k in kl_1m]; ema20=calc_ema(closes,20); ema50=calc_ema(closes,50)
+        atr=calc_atr(kl_1m,14); atr_perc=(atr/prezzo*100) if prezzo else 0
         ema_side="sopra EMA50" if prezzo>ema50 else "sotto EMA50"
-        klines_lunghi=fetch_storico_kraken(sym, interval, GIORNI_STORICO)
-        storico_txt=get_storico_stats(klines_lunghi, rsi, vol, 5, GIORNI_STORICO, interval, klines_now=klines, trend_now=trend)
-        nome=sym.replace("EUR","")
-        msg+=f"\n{nome}: {prezzo:,.2f}E ({var:+.2f}%) {trend} | {vol} | RSI {rsi:.1f} {rsi_lbl} | {ema_side} | ATR {atr_perc:.2f}%\n"
-        msg+=f" └─ {storico_txt}\n"
-        if interval=="1m":
-            klines_5m=get_klines_kraken(sym, "5m", 50)
-            if klines_5m:
-                trend_5m=get_trend(klines_5m)
-                if trend_cat(trend)!=trend_cat(trend_5m) and trend!="FLAT" and trend_5m!="FLAT":
-                    msg+=f" CONFLITTO: 1m {trend} vs 5m {trend_5m} -> SKIP\n"
-                elif trend_cat(trend)==trend_cat(trend_5m) and trend!="FLAT":
-                    msg+=f" ALLINEATO con 5m ({trend_5m})\n"
+
+        # Storico per scalping - 7 giorni
+        storico_1m=fetch_storico_binance(sym, "1m", 7)
+        storico_5m=fetch_storico_binance(sym, "5m", 7)
+        txt_1m, media_1m, soglia_1m = get_storico_stats_start(storico_1m, rsi_1m, vol_1m, trend_1m, kl_1m, candele_dopo=5)
+        txt_5m, media_5m, soglia_5m = get_storico_stats_start(storico_5m, rsi_5m, vol_5m, trend_5m, kl_5m, candele_dopo=5)
+
+        # Alert movimento in corso (quello che hai nello screenshot)
+        alert=""
+        if abs(var_5m)>=0.25:
+            alert+=f"\n   ⚡ MOVIMENTO {var_5m:+.2f}% in 5m - ATTENZIONE!"
+        if abs(var_1m_3)>=0.20:
+            alert+=f"\n   ⚡ SCALP {var_1m_3:+.2f}% in 3m"
+        if rsi_1m>70 or rsi_1m<30:
+            alert+=f"\n   ⚠️ RSI {rsi_1m:.0f} {'IPERCOMPRATO' if rsi_1m>70 else 'IPERVENDUTO'}"
+
+        nome=sym.replace("USDT","")
+        msg+=f"\n{nome}: {prezzo:.2f} ({var_5m:+.2f}% 5m) {trend_1m} | {vol_1m} | RSI {rsi_1m:.0f} | {ema_side} | ATR {atr_perc:.2f}%{alert}\n"
+        msg+=f" └─ 1m: {txt_1m}\n"
+        msg+=f" └─ 5m: {txt_5m} | Trend 5m: {trend_5m}\n"
+        if trend_cat(trend_1m)!=trend_cat(trend_5m) and trend_1m!="FLAT" and trend_5m!="FLAT":
+            msg+=f"   CONFLITTO 1m vs 5m, ma in START puoi fare SCALP piccolo\n"
     return msg
 
 def loop_bot():
-    log_msg("Bot V10 PRECISIONE ITALY avviato - 30gg...")
-    for sym in SYMBOLS:
-        fetch_storico_kraken(sym, "1m", GIORNI_STORICO)
-        fetch_storico_kraken(sym, "5m", GIORNI_STORICO)
-    log_msg("Storico caricato")
-    send_telegram("Bot V10 ITALY partito! Ora italiana + EMA + ATR + min 25 casi | Conf A/B/C")
-    ultimo_5m=-1
-    def aspetta():
-        ora=now_italy()
-        prossimo=(ora+timedelta(minutes=1)).replace(second=5, microsecond=0)
-        attesa=(prossimo-ora).total_seconds()
-        if attesa>0: time.sleep(attesa)
+    log_msg("Bot V11 START partito - modalita scalping per iniziare")
+    send_telegram("✅ Bot V11 START partito! Modalita SCALP - ti avviso anche di movimenti +0.10% / +0.25%, VOL BASSO incluso, min 10 casi")
+    for s in SYMBOLS:
+        fetch_storico_binance(s, "1m", 7)
+        fetch_storico_binance(s, "5m", 7)
     while True:
         try:
-            aspetta()
-            ora=now_italy()
-            m1=genera_messaggio("1m")
-            send_telegram(m1)
-            log_msg(f"[1m] Inviato {ora.strftime('%H:%M:%S')}")
-            if ora.minute%5==0 and ora.minute!=ultimo_5m:
-                time.sleep(1)
-                m5=genera_messaggio("5m")
-                send_telegram(m5)
-                ultimo_5m=ora.minute
-                log_msg(f"[5m] Inviato {ora.strftime('%H:%M:%S')}")
+            m=genera_messaggio()
+            send_telegram(m)
+            log_msg("Inviato messaggio V11")
+            time.sleep(60)
         except Exception as e:
-            log_msg(f"Loop err: {e}"); time.sleep(10)
+            log_msg(f"Loop err {e}")
+            time.sleep(10)
 
 @app.route("/")
 def home():
@@ -317,12 +284,12 @@ def home():
     if bot_thread is None or not bot_thread.is_alive():
         bot_thread=threading.Thread(target=loop_bot, daemon=True)
         bot_thread.start()
-        return "Bot riavviato", 200
-    return f"Bot V10 vivo - /log", 200
+        return "Bot V11 START riavviato", 200
+    return f"Bot V11 vivo - {len(LOGS)} log", 200
 
 @app.route("/log")
 def show_log():
-    return "<br>".join(LOGS[-400:])
+    return "<br>".join(LOGS[-300:])
 
 bot_thread=threading.Thread(target=loop_bot, daemon=True)
 bot_thread.start()
