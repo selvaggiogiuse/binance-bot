@@ -7,7 +7,7 @@ from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID")
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR", "BNBEUR"]
 
 app = Flask(__name__)
 LOGS = []
