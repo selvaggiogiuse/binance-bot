@@ -16,7 +16,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN") or "89295
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHAT_ID") or "423945798"
 
 # Per iniziare meglio USDT (piu volume), poi puoi rimettere EUR
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SYMBOLS = ["BTCEUR", "ETHEUR", "SOLEUR"]
 BINANCE_KLINES = "https://data-api.binance.vision/api/v3/klines"
 BINANCE_KLINES2 = "https://api1.binance.com/api/v3/klines"
 GIORNI_STORICO = 7  # per scalping bastano 7 giorni, cosi e piu reattivo
