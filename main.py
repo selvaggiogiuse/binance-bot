@@ -425,38 +425,20 @@ HTML_B64 = (
     "PC9ib2R5PjwvaHRtbD4K"
 )
 
-def b64_decode(data):
-    return base64.b64decode(data)
+def b64_decode(d): return base64.b64decode(d)
 app = Flask(__name__)
 LOGS = []
-bot_thread = None
-def log_msg(msg):
-    t = datetime.now().strftime("%H:%M:%S")
-    entry = f"[{t}] {msg}"
-    print(entry, flush=True)
-    LOGS.append(entry)
-    if len(LOGS) > 300:
-        LOGS.pop(0)
-def get_price_info(symbol):
-    try:
-        url = f"https://data-api.binance.vision/api/v3/ticker/24hr?symbol={symbol}"
-        d = requests.get(url, timeout=10).json()
-        return float(d['lastPrice']), float(d['priceChangePercent'])
-    except:
-        return 0, 0
-def loop_bot():
-    log_msg("Bot PORTFOLIO LIVE FIX FINALE partito")
-    while True:
-        time.sleep(60)
 @app.route("/")
-def home():
-    return f"Bot FIX FINALE LIVE - <a href='/app'>APP</a>", 200
+def home(): return '<a href="/app">APP PORTAFOGLIO LIVE</a>'
 @app.route("/icon.png")
-def icon_png():
-    return Response(b64_decode(ICON_B64), mimetype="image/png")
+def icon(): return Response(b64_decode(ICON_B64), mimetype="image/png")
+@app.route("/manifest.json")
+def manif():
+    return Response('{"name":"Vendi Portfolio LIVE","start_url":"/app","display":"standalone"}', mimetype="application/json")
+@app.route("/sw.js")
+def sw(): return Response('self.addEventListener("install",e=>self.skipWaiting())', mimetype="application/javascript")
 @app.route("/app")
 def serve_app():
-    html = b64_decode(HTML_B64).decode()
-    return Response(html, mimetype="text/html")
+    return Response(b64_decode(HTML_B64).decode(), mimetype="text/html")
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
