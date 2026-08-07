@@ -1,38 +1,256 @@
-
-import os
-from flask import Flask, Response
-import json, base64
+import os, json, base64, time, threading, requests, math
+from flask import Flask, Response, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
 
-ICON_192_B64 = "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"
-ICON_512_B64 = "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"
+# --- ICONS (same as before) ---
+ICON_192_B64 = "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"
+ICON_512_B64 = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAko0lEQVR4nO3dd5RcZ5nn8d+tuhW6JVnRVrIl2YqWWlayQrdkG9vYOBJsbMYGk1kYDrPMzB6YZWCBBZaBZYblzNk9A8PGIQeHY4NlsMFWd6tbOScrB1vBtrI6VNWtuvuHMNhGkrtbVfXeW8/38w//AH27VXXv733u+zyv94Wmo6EAAIApPk9/AADsSbi+AAAAUH0EAAAADCIAAABgEAEAAACDCAAAABhEAAAAwCA/9FxfAgAAqDYqAAAAGEQAAADAIAIAAAAGEQAAADCIAAAAgEEEAAAADPJFGyAAAOZwHDAAAAbxCgAAAIMIAAAAGEQAAADAIAIAAAAGEQAAADCINkAAAAyiAgAAgEHMAQAAwCAqAAAAGEQAAADAIAIAAAAGEQAAADCINkAAAAyiAgAAgEEEAAAADGIOAAAABlEBAADAIAIAAAAGEQAAADCINkAAAAyiAgAAgEEEAAAADCIAAABgEHMAAAAwiAoAAAAGEQAAADCINkAAAAyiAgAAgEEEAAAADCIAAABgEAEAAACDmAMAAIBBVAAAADCINkAAAAyiAgAAgEEEAAAADCIAAABgEAEAAACDCAAAABjEHAAAAAzy5dEHCACANbwCAADAIAIAAAAGEQAAADCIAAAAgEEEAAAADCIAAABgkB/SBQgAgDlUAAAAMIgAAACAQQQAAAAMIgAAAGAQAQAAAIMIAAAAGMRxwAAAGOSLOQAAAJjDKwAAAAwiAAAAYBABAAAAgwgAAAAYRAAAAMAgAgAAAAZxHDAAAAZRAQAAwCACAAAABhEAAAAwiAAAAIBBBAAAAAwiAAAAYBCnAQIAYJAfur4CAABQdbwCAADAIAIAAAAGEQAAADCIAAAAgEEEAAAADKINEAAAg6gAAABgEHMAAAAwiAoAAAAGEQAAADCIAAAAgEEEAAAADKINEAAAg6gAAABgEAEAAACDmAMAAIBBVAAAADCIAAAAgEEEAAAADOI0QAAADKICAACAQQQAAAAMIgAAAGAQcwAAADCICgAAAAYRAAAAMIg2QAAADKICAACAQQQAAAAMIgAAAGAQAQAAAIOYAwAAgEFUAAAAMIg2QAAADKICAACAQQQAAAAMIgAAAGAQAQAAAIOYAwAAgEFUAAAAMIg2QAAADKICAACAQQQAAAAMIgAAAGAQAQAAAIP8kDZAAADMoQIAAIBBBAAAAAwiAAAAYBABAAAAgwgAAAAYRAAAAMCg/w9rlW5bFORsxQAAAABJRU5ErkJggg=="
 
+# --- VAPID KEYS ---
+VAPID_PUBLIC_KEY = "BC2EkkzHG1EPz_akF0s-Fy8CIHFE0Wl6TGWsexqRojEyEh0rjDfKRSqev2HY86U1PBMK2KGnSItpJ_69oKFCshA"
+VAPID_PRIVATE_B64 = "DCxSVC_1bZciFroQkmmL6nejqkjSM_cxtPf4CXKN8V8"
+VAPID_SUBJECT = "mailto:vendieuro@example.com"
+
+SUBS_FILE = "/tmp/subs.json"
+latest_signals = []
+prev_signals = {}
+subscriptions = []
+
+def load_subs():
+    global subscriptions
+    try:
+        if os.path.exists(SUBS_FILE):
+            with open(SUBS_FILE, 'r') as f:
+                subscriptions = json.load(f)
+    except: subscriptions = []
+
+def save_subs():
+    try:
+        with open(SUBS_FILE, 'w') as f:
+            json.dump(subscriptions, f)
+    except: pass
+
+load_subs()
+
+# --- VAPID JWT ---
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, utils
+
+def b64url_encode(b): return base64.urlsafe_b64encode(b).decode().rstrip("=")
+def b64url_decode(s):
+    s += "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s)
+
+priv_bytes = b64url_decode(VAPID_PRIVATE_B64)
+priv_int = int.from_bytes(priv_bytes, 'big')
+private_key_obj = ec.derive_private_key(priv_int, ec.SECP256R1())
+
+def create_vapid_token(aud):
+    import json as js
+    header = {"typ":"JWT","alg":"ES256"}
+    payload = {"aud": aud, "exp": int(time.time())+86400, "sub": VAPID_SUBJECT}
+    hb = b64url_encode(js.dumps(header, separators=(',',':')).encode())
+    pb = b64url_encode(js.dumps(payload, separators=(',',':')).encode())
+    signing_input = f"{hb}.{pb}".encode()
+    der_sig = private_key_obj.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    r, s = utils.decode_dss_signature(der_sig)
+    raw = r.to_bytes(32,'big') + s.to_bytes(32,'big')
+    sb = b64url_encode(raw)
+    return f"{hb}.{pb}.{sb}"
+
+def send_push_no_payload(sub):
+    try:
+        from urllib.parse import urlparse
+        endpoint = sub.get('endpoint','')
+        if not endpoint: return False
+        parsed = urlparse(endpoint)
+        aud = f"{parsed.scheme}://{parsed.netloc}"
+        token = create_vapid_token(aud)
+        headers = {
+            "Authorization": f"vapid t={token}, k={VAPID_PUBLIC_KEY}",
+            "TTL": "60",
+            "Content-Length": "0"
+        }
+        r = requests.post(endpoint, headers=headers, timeout=8)
+        if r.status_code in [404,410]:
+            return False
+        return r.status_code in [200,201,202,204]
+    except Exception as e:
+        print(f"push error {e}")
+        return True
+
+def send_push_to_all():
+    global subscriptions
+    to_keep=[]
+    for sub in subscriptions:
+        ok = send_push_no_payload(sub)
+        if ok is not False:
+            to_keep.append(sub)
+    if len(to_keep)!=len(subscriptions):
+        subscriptions=to_keep
+        save_subs()
+
+# --- TRADING LOGIC (python replica of JS) ---
+def fetch_klines(symbol, interval='1h', limit=150):
+    urls=[
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
+    for u in urls:
+        try:
+            r=requests.get(u, timeout=6)
+            if r.status_code==200:
+                j=r.json()
+                if j and isinstance(j,list) and len(j)>0 and not (isinstance(j,dict) and 'code' in j):
+                    return j
+        except: pass
+    return []
+
+def calc_rsi(prices, period=14):
+    if len(prices)<period+1: return 50
+    gains=0; losses=0
+    for i in range(1, period+1):
+        d=prices[i]-prices[i-1]
+        if d>=0: gains+=d
+        else: losses-=d
+    ag=gains/period; al=losses/period
+    if al==0: return 85
+    for i in range(period+1, len(prices)):
+        d=prices[i]-prices[i-1]
+        gg=d if d>0 else 0
+        ll=-d if d<0 else 0
+        ag=(ag*(period-1)+gg)/period
+        al=(al*(period-1)+ll)/period
+    if al==0: return 85
+    rs=ag/al
+    return 100-100/(1+rs)
+
+def calc_ema(prices, period):
+    k=2/(period+1)
+    ema=prices[0]
+    for p in prices[1:]:
+        ema=p*k+ema*(1-k)
+    return ema
+
+def calc_conf(stato, rsi, ema20, ema50, volLabel):
+    c=50; reasons=[]
+    if stato=='COMPRA':
+        if rsi<25: c+=28; reasons.append('Ipervenduto')
+        elif rsi<35: c+=18; reasons.append('RSI basso')
+        elif rsi>60: c-=12; reasons.append('RSI alto')
+        if ema20>ema50: c+=14; reasons.append('Rialzista')
+        else: c-=14; reasons.append('Contro-trend')
+        if volLabel=='VOL ALTO': c+=14; reasons.append('Vol alto')
+        elif volLabel=='VOL BASSO': c-=16; reasons.append('Vol basso')
+    elif stato=='VENDI':
+        if rsi>75: c+=28; reasons.append('Ipercomprato')
+        elif rsi>65: c+=18; reasons.append('RSI alto')
+        elif rsi<40: c-=12; reasons.append('RSI basso')
+        if ema20<ema50: c+=14; reasons.append('Ribassista')
+        else: c-=14; reasons.append('Contro-trend')
+        if volLabel=='VOL ALTO': c+=14; reasons.append('Vol alto')
+        elif volLabel=='VOL BASSO': c-=16; reasons.append('Vol debole')
+    else:
+        c=45+abs(rsi-50)/2; reasons.append('Laterale')
+    conf=max(12,min(94, round(c)))
+    return conf, reasons
+
+def check_coins():
+    global latest_signals, prev_signals
+    configs=[
+        ('BTCEUR',['BTCEUR']),
+        ('ETHEUR',['ETHEUR']),
+        ('PAXGEUR',['PAXGEUR','PAXGUSDT'])
+    ]
+    new_signals=[]
+    for label, fallbacks in configs:
+        kl=None; used=None
+        for sym in fallbacks:
+            kl=fetch_klines(sym,'1h',150)
+            if kl and len(kl)>30:
+                used=sym; break
+        if not kl: continue
+        closes=[float(c[4]) for c in kl]
+        vols=[float(c[5]) for c in kl]
+        # EUR/USDT conversion if needed
+        if used and used.endswith('USDT'):
+            try:
+                eur_kl=fetch_klines('EURUSDT','1h',2)
+                if eur_kl:
+                    rate=float(eur_kl[-1][4])
+                    closes=[p/rate for p in closes]
+            except: pass
+        price=closes[-1]
+        rsi=calc_rsi(closes,14)
+        ema20=calc_ema(closes,20)
+        ema50=calc_ema(closes,50)
+        vol_now=vols[-1]; vol_avg=sum(vols[-21:-1])/20 if len(vols)>21 else vol_now
+        if vol_now < vol_avg*0.7: volLabel='VOL BASSO'
+        elif vol_now > vol_avg*1.9: volLabel='VOL ALTO'
+        else: volLabel='VOL NORMALE'
+        trend='Rialzista' if ema20>ema50 else 'Ribassista'
+        stato='FERMO'
+        if rsi>70: stato='VENDI'
+        elif rsi<30: stato='COMPRA'
+        elif ema20>ema50 and rsi>55: stato='COMPRA'
+        elif ema20<ema50 and rsi<45: stato='VENDI'
+        conf, reasons = calc_conf(stato, rsi, ema20, ema50, volLabel)
+        if conf>=60 and stato in ('COMPRA','VENDI'):
+            key=f"{label}_1h"
+            if prev_signals.get(key)!=stato:
+                new_signals.append({
+                    'sym': label,
+                    'stato': stato,
+                    'conf': conf,
+                    'price': price,
+                    'reason': reasons[0] if reasons else '',
+                    'rsi': round(rsi,1),
+                    'time': int(time.time()*1000)
+                })
+                prev_signals[key]=stato
+    if new_signals:
+        latest_signals = new_signals + latest_signals
+        latest_signals = latest_signals[:20]
+        print(f"NEW SIGNALS {new_signals} -> pushing to {len(subscriptions)} subs")
+        send_push_to_all()
+    else:
+        print(f"check {datetime.now()} no new signal")
+
+def checker_loop():
+    while True:
+        try:
+            check_coins()
+        except Exception as e:
+            print(f"checker error {e}")
+        time.sleep(60)
+
+threading.Thread(target=checker_loop, daemon=True).start()
+
+# --- HTML APP ---
 HTML = """<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#7c3aed">
-<link rel="manifest" href="/manifest.json">
-<link rel="icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.json"><link rel="icon" href="/icon-192.png">
 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>:root{--bg:#070b18;--card:#131a2e;--card2:#0a1020;--border:#1e2a4a;--text:#e2e8f0;--muted:#94a3b8}.light{--bg:#f1f5f9;--card:#fff;--card2:#f8fafc;--border:#e2e8f0;--text:#0f172a;--muted:#64748b}*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:system-ui;padding:12px;padding-bottom:90px} .header{position:sticky;top:0;z-index:20;background:var(--bg);padding:10px 0;margin:-12px -12px 14px;padding-left:12px;padding-right:12px;border-bottom:1px solid var(--border)}.h-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.logo{width:42px;height:42px;background:linear-gradient(135deg,#7c3aed,#3b82f6);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff}.btn{border:none;padding:7px 11px;border-radius:20px;font-weight:700;cursor:pointer;font-size:12px}.btn-install{background:var(--text);color:var(--bg)}.btn-icon{background:var(--card);color:var(--text);border:1px solid var(--border)}.btn-icon.on{background:#10b981;color:#000}.tf-bar{display:flex;gap:6px;overflow-x:auto;margin-top:10px}.tf{padding:6px 14px;border-radius:20px;background:var(--card);border:1px solid var(--border);color:var(--muted);font-weight:700;font-size:13px;cursor:pointer}.tf.active{background:var(--text);color:var(--bg)}.card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:14px;margin-bottom:12px}.price{font-size:26px;font-weight:900}.badge{padding:5px 10px;border-radius:20px;font-weight:900;font-size:11px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}.mini{font-size:10px;opacity:.6;text-transform:uppercase;color:var(--muted)}.val{font-size:13px;font-weight:800;display:block;margin-top:2px}.conf-bar{height:6px;background:var(--card2);border-radius:10px;overflow:hidden;margin-top:6px}.conf-fill{height:100%;border-radius:10px}.chart-wrap{margin-top:12px;background:var(--card2);border-radius:14px;padding:8px;display:none;border:1px solid var(--border)}.chart-wrap.open{display:block}.chart-box{width:100%;height:300px}.btn-chart{background:var(--card2);border:1px solid var(--border);color:var(--muted);width:100%;margin-top:8px;padding:8px;border-radius:20px}.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 20px;border-radius:30px;font-weight:800;z-index:99;display:none;max-width:90%;text-align:center}.hist-table{width:100%;font-size:12px;border-collapse:collapse}.hist-table th{font-size:10px;opacity:.5;text-align:left;padding:6px}.hist-table td{padding:8px 6px;border-top:1px solid var(--border)}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
 #installBanner{display:none;position:fixed;bottom:80px;left:12px;right:12px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;z-index:50;box-shadow:0 10px 30px #0005}
 </style></head><body>
-<div class="header"><div class="h-row"><div class="logo">V€</div><div style="flex:1"><div style="font-weight:900;font-size:14px">Vendi STABILE INSTALL</div><div style="font-size:10px;opacity:.6">BTC • ETH • ORO | PWA OK | 5M+ no 1M</div></div><button class="btn btn-icon" id="themeBtn">🌙</button><button class="btn btn-icon" id="notifBtn">🔔</button><button class="btn btn-icon" id="soundBtn">🔊</button><button class="btn btn-icon" id="histBtn">📜</button><button class="btn btn-install" id="installBtn" style="display:none">📲 Installa</button></div>
+<div class="header"><div class="h-row"><div class="logo">V€</div><div style="flex:1"><div style="font-weight:900;font-size:14px">Vendi STABILE PUSH</div><div style="font-size:10px;opacity:.6">BTC • ETH • ORO | PUSH VERO | CLICK APRE APP</div></div><button class="btn btn-icon" id="themeBtn">🌙</button><button class="btn btn-icon" id="notifBtn">🔔</button><button class="btn btn-icon" id="soundBtn">🔊</button><button class="btn btn-icon" id="histBtn">📜</button><button class="btn btn-install" id="installBtn" style="display:none">📲 Installa</button></div>
 <div class="tf-bar"><div class="tf" data-tf="5m">5m</div><div class="tf" data-tf="15m">15m</div><div class="tf active" data-tf="1h">1H</div><div class="tf" data-tf="4h">4H</div><div class="tf" data-tf="1d">1D</div></div></div>
-
-<div id="installBanner"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:900">📲 Installa come App</div><div style="font-size:11px;opacity:.7">Ora funziona come prima - a tutto schermo</div></div><div style="display:flex;gap:8px"><button class="btn btn-icon" onclick="document.getElementById('installBanner').style.display='none'">✕</button><button class="btn btn-install" id="bannerInstall">Installa</button></div></div></div>
-
+<div id="installBanner"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:900">📲 Installa come App</div><div style="font-size:11px;opacity:.7">Push vero - notifiche anche ad app chiusa</div></div><div style="display:flex;gap:8px"><button class="btn btn-icon" onclick="document.getElementById('installBanner').style.display='none'">✕</button><button class="btn btn-install" id="bannerInstall">Installa</button></div></div></div>
 <div class="card" style="display:flex;align-items:center;gap:12px"><div style="width:44px;height:44px;background:var(--card2);border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid var(--border)">📊</div><div style="flex:1"><div style="font-size:10px;letter-spacing:2px;opacity:.6">GLOBALE</div><div id="globale" style="font-size:17px;font-weight:900;color:#fbbf24">CARICAMENTO...</div><div id="globaleSub" style="font-size:11px;opacity:.6"></div></div><div style="text-align:right"><div style="font-size:9px;opacity:.5">TF</div><div id="tfLabel" style="font-weight:900">1H</div></div></div>
-
 <div id="coins"></div>
 <div class="card" id="historyCard" style="display:none"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:900">📜 Storico con TF</div><div style="display:flex;gap:6px"><button class="btn btn-icon" onclick="clearHistory()">🗑️</button><button class="btn btn-icon" onclick="document.getElementById('historyCard').style.display='none'">✕</button></div></div><div style="max-height:400px;overflow-y:auto"><table class="hist-table"><thead><tr><th>ORA</th><th>COIN</th><th>SEGNALE</th><th>%</th><th>PREZZO</th><th>TF</th></tr></thead><tbody id="histBody"></tbody></table></div></div>
 <div style="text-align:center;margin-top:10px;font-size:11px;opacity:.4" id="upd"></div><div class="toast" id="toast"></div>
-
 <script>
+const VAPID_PUBLIC_KEY="BC2EkkzHG1EPz_akF0s-Fy8CIHFE0Wl6TGWsexqRojEyEh0rjDfKRSqev2HY86U1PBMK2KGnSItpJ_69oKFCshA";
+function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const rawData=window.atob(base64);const outputArray=new Uint8Array(rawData.length);for(let i=0;i<rawData.length;++i){outputArray[i]=rawData.charCodeAt(i);}return outputArray;}
+async function subscribePush(){try{if(!('serviceWorker' in navigator) || !('PushManager' in window))return;const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();if(!sub){sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});}await fetch('/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});console.log('Push subscribed OK');showToast('✅ Push vero attivo - anche ad app chiusa');}catch(e){console.error('Push fail',e);showToast('❌ Push non riuscito: '+e.message);}}
 let deferredPrompt=null;
 window.addEventListener('beforeinstallprompt',(e)=>{e.preventDefault();deferredPrompt=e;document.getElementById('installBtn').style.display='inline-block';document.getElementById('installBanner').style.display='block';});
 document.getElementById('installBtn').onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt();let {outcome}=await deferredPrompt.userChoice;if(outcome==='accepted')showToast('✅ App installata!');deferredPrompt=null;document.getElementById('installBtn').style.display='none';document.getElementById('installBanner').style.display='none';}};
 document.getElementById('bannerInstall').onclick=()=>document.getElementById('installBtn').click();
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{});}
-
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').then(()=>{console.log('SW ok');}).catch(()=>{});}
 let soundOn=false,notifOn=false,currentTF='1h',prevSignals={},charts={};
 const COIN_CONFIG=[
   {id:'BTCEUR', label:'BTCEUR', name:'BTC', fallbacks:['BTCEUR']},
@@ -45,10 +263,10 @@ let savedTheme=localStorage.getItem('vendi-theme')||'dark';
 if(savedTheme==='light'){document.body.classList.add('light');}
 document.getElementById('themeBtn').onclick=()=>{if(document.body.classList.contains('light')){document.body.classList.remove('light');localStorage.setItem('vendi-theme','dark');} else {document.body.classList.add('light');localStorage.setItem('vendi-theme','light');}};
 function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
-function pushNotif(title,body){if(!notifOn)return;try{if('serviceWorker' in navigator){navigator.serviceWorker.ready.then(reg=>{reg.showNotification(title,{body,icon:'/icon-192.png',vibrate:[200,100,200],tag:title})});} else {new Notification(title,{body});}}catch(e){try{new Notification(title,{body})}catch{}}}
-async function enableNotif(){let p=await Notification.requestPermission();if(p==='granted'){notifOn=true;localStorage.setItem('vendi-notif','on');document.getElementById('notifBtn').classList.add('on');showToast('🔔 Notifiche attive');}}
+function pushNotif(title,body){if(!notifOn)return;try{if('serviceWorker' in navigator){navigator.serviceWorker.ready.then(reg=>{reg.showNotification(title,{body,icon:'/icon-192.png',vibrate:[200,100,200],tag:title,data:{url:'/app'}})});} else {new Notification(title,{body});}}catch(e){try{new Notification(title,{body})}catch{}}}
+async function enableNotif(){let p=await Notification.requestPermission();if(p==='granted'){notifOn=true;localStorage.setItem('vendi-notif','on');document.getElementById('notifBtn').classList.add('on');showToast('🔔 Notifiche attive');await subscribePush();}}
 document.getElementById('notifBtn').onclick=()=>{if(notifOn){notifOn=false;localStorage.setItem('vendi-notif','off');document.getElementById('notifBtn').classList.remove('on');} else enableNotif();};
-if(localStorage.getItem('vendi-notif')==='on'){notifOn=true;document.getElementById('notifBtn').classList.add('on');}
+if(localStorage.getItem('vendi-notif')==='on'){notifOn=true;document.getElementById('notifBtn').classList.add('on');setTimeout(()=>{subscribePush();},2000);}
 function playSound(t){if(!soundOn)return;try{if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);if(t==='COMPRA'){o.frequency.value=880;g.gain.value=0.15;o.start();g.gain.exponentialRampToValueAtTime(0.01,audioCtx.currentTime+0.6);o.stop(audioCtx.currentTime+0.6);} else {o.frequency.value=220;g.gain.value=0.2;o.type='sawtooth';o.start();g.gain.exponentialRampToValueAtTime(0.01,audioCtx.currentTime+0.8);o.stop(audioCtx.currentTime+0.8);}}catch{}}
 document.getElementById('soundBtn').onclick=()=>{soundOn=!soundOn;const b=document.getElementById('soundBtn');if(soundOn){b.classList.add('on');if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();audioCtx.resume();localStorage.setItem('vendi-sound','on');} else {b.classList.remove('on');localStorage.setItem('vendi-sound','off');}};
 if(localStorage.getItem('vendi-sound')==='on'){soundOn=true;document.getElementById('soundBtn').classList.add('on');}
@@ -130,7 +348,7 @@ async function refresh(){
  if(comp>=2){glob.textContent='COMPRA';glob.style.color='#10b981';sub.textContent=comp+'/'+total+' COMPRA';}
  else if(vend>=2){glob.textContent='VENDI';glob.style.color='#ef4444';sub.textContent=vend+'/'+total+' VENDI';}
  else {glob.textContent='FERMO';glob.style.color='#fbbf24';sub.textContent='Laterale';}
- document.getElementById('upd').textContent='Agg: '+new Date().toLocaleTimeString('it-IT')+' • TF:'+currentTF.toUpperCase()+' • PWA OK';
+ document.getElementById('upd').textContent='Agg: '+new Date().toLocaleTimeString('it-IT')+' • TF:'+currentTF.toUpperCase()+' • PUSH VERO';
  setTimeout(async ()=>{for(let tf of SCAN_TFS){if(tf===currentTF) continue; for(let cfg of COIN_CONFIG){await loadCoinForTF(cfg,tf); await new Promise(r=>setTimeout(r,300));}} },2000);
 }
 function toggleChart(sym){
@@ -144,12 +362,16 @@ function toggleChart(sym){
   }
 }
 refresh();setInterval(refresh,60000);renderHistory();
+// handle ?sym param to highlight
+const urlParams=new URLSearchParams(window.location.search);
+const symParam=urlParams.get('sym');
+if(symParam){setTimeout(()=>{document.getElementById('coins')?.scrollIntoView();},1000);}
 </script></body></html>
 """
 
 @app.route("/")
 def home():
-    return '<a href="/app">Vai alla versione INSTALL OK - BTC ETH ORO</a>'
+    return '<a href="/app">Vai alla versione PUSH VERO</a>'
 
 @app.route("/app")
 def app_route():
@@ -158,8 +380,8 @@ def app_route():
 @app.route("/manifest.json")
 def manifest():
     data={
-        "name":"Vendi STABILE FIX",
-        "short_name":"Vendi€ FIX",
+        "name":"Vendi STABILE PUSH VERO",
+        "short_name":"Vendi€ PUSH",
         "start_url":"/app",
         "display":"standalone",
         "background_color":"#070b18",
@@ -173,8 +395,77 @@ def manifest():
 
 @app.route("/sw.js")
 def sw():
-    js="""self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());self.addEventListener('fetch',e=>{});"""
+    js="""
+self.addEventListener('install',e=>self.skipWaiting());
+self.addEventListener('activate',e=>self.clients.claim());
+self.addEventListener('push', event=>{
+  event.waitUntil(
+    fetch('/api/latest').then(r=>r.json()).then(d=>{
+      if(!d.signals || !d.signals.length){
+        return self.registration.showNotification('Vendi€ PUSH', {body:'Controllo completato - nessun segnale forte', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}, vibrate:[200,100,200]});
+      }
+      const s=d.signals[0];
+      const title=`${s.sym}: ${s.stato} ${s.conf}%`;
+      const body=`€${s.price.toFixed(2)} - ${s.reason} - RSI ${s.rsi} - CLICCA PER APRIRE`;
+      return self.registration.showNotification(title, {body, icon:'/icon-192.png', badge:'/icon-192.png', data:{url:`/app?sym=${s.sym}`}, tag:s.sym, renotify:true, vibrate:[200,100,200], requireInteraction:true});
+    }).catch(()=>self.registration.showNotification('Vendi€ FIX', {body:'Nuovo segnale! Clicca per aprire', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}}))
+  );
+});
+self.addEventListener('notificationclick', event=>{
+  event.notification.close();
+  const url=event.notification.data && event.notification.data.url || '/app';
+  event.waitUntil(
+    clients.matchAll({type:'window', includeUncontrolled:true}).then(clientList=>{
+      for(let c of clientList){
+        if(c.url.includes('/app') && 'focus' in c){
+          c.focus();
+          if(c.navigate) c.navigate(url);
+          return;
+        }
+      }
+      if(clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
+self.addEventListener('fetch', e=>{});
+"""
     return Response(js, mimetype="application/javascript")
+
+@app.route("/vapidPublicKey")
+def vapid_key():
+    return jsonify({"publicKey": VAPID_PUBLIC_KEY})
+
+@app.route("/subscribe", methods=["POST"])
+def subscribe():
+    try:
+        data=request.get_json()
+        if not data or 'endpoint' not in data:
+            return jsonify({"error":"no endpoint"}), 400
+        # avoid duplicates
+        exists=False
+        for s in subscriptions:
+            if s.get('endpoint')==data.get('endpoint'):
+                exists=True; break
+        if not exists:
+            subscriptions.append(data)
+            save_subs()
+        print(f"New sub, total {len(subscriptions)}")
+        return jsonify({"ok":True, "total": len(subscriptions)})
+    except Exception as e:
+        return jsonify({"error":str(e)}), 500
+
+@app.route("/api/latest")
+def api_latest():
+    return jsonify({"signals": latest_signals, "time": int(time.time()*1000)})
+
+@app.route("/test-push")
+def test_push():
+    # forza un segnale finto per test
+    global latest_signals
+    latest_signals=[{"sym":"BTCEUR","stato":"COMPRA","conf":88,"price":56222.37,"reason":"Test PUSH VERO","rsi":58.5,"time":int(time.time()*1000)}] + latest_signals
+    latest_signals=latest_signals[:10]
+    send_push_to_all()
+    return jsonify({"ok":True, "sent_to": len(subscriptions), "signals": latest_signals})
 
 @app.route("/icon-192.png")
 def icon192():
