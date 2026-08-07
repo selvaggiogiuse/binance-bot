@@ -1,4 +1,11 @@
-import os, json, base64, time, threading, requests, math
+import os, json, base64, time, threading, math
+try:
+    import requests
+    HAS_REQUESTS=True
+except:
+    HAS_REQUESTS=False
+    import urllib.request as _urllib
+    import urllib.error as _uerror
 from flask import Flask, Response, request, jsonify
 from datetime import datetime
 
@@ -35,19 +42,32 @@ def save_subs():
 load_subs()
 
 # --- VAPID JWT ---
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, utils
+try:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+    HAS_CRYPTO=True
+    print('crypto ok')
+except Exception as e:
+    HAS_CRYPTO=False
+    print(f'crypto missing {e}')
+    hashes=None; ec=None; utils=None
 
 def b64url_encode(b): return base64.urlsafe_b64encode(b).decode().rstrip("=")
 def b64url_decode(s):
     s += "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode(s)
 
-priv_bytes = b64url_decode(VAPID_PRIVATE_B64)
-priv_int = int.from_bytes(priv_bytes, 'big')
-private_key_obj = ec.derive_private_key(priv_int, ec.SECP256R1())
+if HAS_CRYPTO:
+    priv_bytes = b64url_decode(VAPID_PRIVATE_B64)
+    priv_int = int.from_bytes(priv_bytes, 'big')
+    private_key_obj = ec.derive_private_key(priv_int, ec.SECP256R1())
+else:
+    private_key_obj=None
 
 def create_vapid_token(aud):
+    if not HAS_CRYPTO:
+        return 'dummy'
+
     import json as js
     header = {"typ":"JWT","alg":"ES256"}
     payload = {"aud": aud, "exp": int(time.time())+86400, "sub": VAPID_SUBJECT}
@@ -61,6 +81,9 @@ def create_vapid_token(aud):
     return f"{hb}.{pb}.{sb}"
 
 def send_push_no_payload(sub):
+    if not HAS_CRYPTO:
+        print('push skipped no crypto')
+        return True
     try:
         from urllib.parse import urlparse
         endpoint = sub.get('endpoint','')
@@ -73,10 +96,31 @@ def send_push_no_payload(sub):
             "TTL": "60",
             "Content-Length": "0"
         }
-        r = requests.post(endpoint, headers=headers, timeout=8)
-        if r.status_code in [404,410]:
+        if HAS_REQUESTS:
+            r = requests.post(endpoint, headers=headers, timeout=8)
+            status = r.status_code
+            text = r.text[:200] if hasattr(r,'text') else ''
+        else:
+            # fallback urllib
+            req = _urllib.Request(endpoint, data=b'', headers=headers, method='POST')
+            try:
+                with _urllib.urlopen(req, timeout=8) as resp:
+                    status = resp.getcode()
+                    text = ''
+            except _uerror.HTTPError as he:
+                status = he.code
+                text = ''
+            except Exception as e:
+                print(f'push urllib error {e}')
+                return True
+        # print(f"push status {status}")
+        r_status = status
+        if False:
+            r = None
+        
+        if r_status in [404,410]:
             return False
-        return r.status_code in [200,201,202,204]
+        return r_status in [200,201,202,204]
     except Exception as e:
         print(f"push error {e}")
         return True
@@ -100,12 +144,21 @@ def fetch_klines(symbol, interval='1h', limit=150):
     ]
     for u in urls:
         try:
-            r=requests.get(u, timeout=6)
-            if r.status_code==200:
-                j=r.json()
-                if j and isinstance(j,list) and len(j)>0 and not (isinstance(j,dict) and 'code' in j):
-                    return j
-        except: pass
+            if HAS_REQUESTS:
+                r=requests.get(u, timeout=6)
+                if r.status_code==200:
+                    j=r.json()
+                    if j and isinstance(j,list) and len(j)>0 and not (isinstance(j,dict) and 'code' in j):
+                        return j
+            else:
+                with _urllib.urlopen(u, timeout=6) as resp:
+                    data=resp.read().decode()
+                    j=json.loads(data)
+                    if j and isinstance(j,list) and len(j)>0:
+                        return j
+        except Exception as e:
+            # print(f"fetch fail {u} {e}")
+            pass
     return []
 
 def calc_rsi(prices, period=14):
