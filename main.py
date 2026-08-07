@@ -435,8 +435,12 @@ def manifest():
     data={
         "name":"Vendi STABILE PUSH VERO",
         "short_name":"Vendi€ PUSH",
+        "id":"/app",
+        "scope":"/",
         "start_url":"/app",
         "display":"standalone",
+        "display_override":["window-controls-overlay","standalone"],
+        "launch_handler":{"client_mode":["focus-existing","auto"]},
         "background_color":"#070b18",
         "theme_color":"#7c3aed",
         "icons":[
@@ -450,7 +454,9 @@ def manifest():
 def sw():
     js="""
 self.addEventListener('install',e=>self.skipWaiting());
-self.addEventListener('activate',e=>self.clients.claim());
+self.addEventListener('activate',e=>{
+  e.waitUntil(self.clients.claim());
+});
 self.addEventListener('push', event=>{
   event.waitUntil(
     fetch('/api/latest').then(r=>r.json()).then(d=>{
@@ -459,24 +465,32 @@ self.addEventListener('push', event=>{
       }
       const s=d.signals[0];
       const title=`${s.sym}: ${s.stato} ${s.conf}%`;
-      const body=`€${s.price.toFixed(2)} - ${s.reason} - RSI ${s.rsi} - CLICCA PER APRIRE`;
+      const body=`€${s.price.toFixed(2)} - ${s.reason} - RSI ${s.rsi} - TAP PER APRIRE APP`;
       return self.registration.showNotification(title, {body, icon:'/icon-192.png', badge:'/icon-192.png', data:{url:`/app?sym=${s.sym}`}, tag:s.sym, renotify:true, vibrate:[200,100,200], requireInteraction:true});
-    }).catch(()=>self.registration.showNotification('Vendi€ FIX', {body:'Nuovo segnale! Clicca per aprire', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}}))
+    }).catch(()=>self.registration.showNotification('Vendi€ PUSH', {body:'Nuovo segnale! Tap per aprire APP', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}}))
   );
 });
 self.addEventListener('notificationclick', event=>{
   event.notification.close();
-  const url=event.notification.data && event.notification.data.url || '/app';
+  const rawUrl = event.notification.data && event.notification.data.url || '/app';
+  const fullUrl = new URL(rawUrl, self.location.origin).href;
   event.waitUntil(
     clients.matchAll({type:'window', includeUncontrolled:true}).then(clientList=>{
-      for(let c of clientList){
-        if(c.url.includes('/app') && 'focus' in c){
-          c.focus();
-          if(c.navigate) c.navigate(url);
-          return;
+      for(let client of clientList){
+        // se c'è già una finestra dell'app, portala in primo piano e naviga lì
+        if(client.url.includes(self.location.origin)){
+          if('focus' in client){
+            if('navigate' in client){
+              client.navigate(fullUrl);
+            }
+            return client.focus();
+          }
         }
       }
-      if(clients.openWindow) return clients.openWindow(url);
+      // altrimenti apri l'app installata (se installata apre come app, non chrome)
+      if(clients.openWindow){
+        return clients.openWindow(fullUrl);
+      }
     })
   );
 });
