@@ -1,550 +1,442 @@
-import os, json, base64, time, threading, math
-try:
-    import requests
-    HAS_REQUESTS=True
-except:
-    HAS_REQUESTS=False
-    import urllib.request as _urllib
-    import urllib.error as _uerror
-from flask import Flask, Response, request, jsonify
-from datetime import datetime
+"""
+Vendi STABILE - PUSH VERO DEFINITIVO
+Fix: Caricamento infinito + Push vere anche ad app chiusa + distinzione SERVER/LOCALE
 
-app = Flask(__name__)
+Deploy su Render.com
+Env vars necessarie:
+- VAPID_PUBLIC_KEY
+- VAPID_PRIVATE_KEY  
+- VAPID_SUBJECT = mailto:tua@email.com
+Opzionali:
+- TELEGRAM_BOT_TOKEN
+- TELEGRAM_CHAT_ID
 
-# --- ICONS (same as before) ---
-ICON_192_B64 = "iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAADiElEQVR4nO3Xu4peZRiG4Xd2mcRNgoVGIcEiboJpxChoIhY2FqYSbMXCLodgPAcre8/AQgTtNAQGRCQixjiVWghqAoaAyczkH4uA4AE4f3FfV7mqh7W4v4+1cuncjf2BqNVlD4BlEgBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAKQJgDQBkCYA0gRAmgBIEwBpAiBNAAfojYsPzNkLm/959u6HD8/jT60taRHryx5Qcv3Kzrz89uH55tO7MzNz6MjKHDu+Ohc/PjbXLu/M4t7M2vrM6VcPzQfnby55bYMADtAv3+3NW++vz+razOLezKmXNmZ7a3fu3N6f7a3d+fqTu3P2wuY8+IiL+aB40wdosZj59fu9OXnm/rnz7LmNuXZ5d/76fTF7OzMnz6zPrT8Xc+uPxZKXdgjggP14ZWeefmVjZmZOnFmfn6/uzszM1c/vzmvvHJ7trd1lzssRwAHb3tqdUy9uzBPPrM1vP+3N4t795y+8uTnffrYzp89vLHdgjAAO2J3b+7N7Z3/OXtica1/dP+2PPbY6G5sr88OXO3P0+OocfdRnOSh+gpfg+pXdef29I/PFR3/PzMyJ59bn9s3FPPn8Q7O2Pv/+I/D/W7l07sb+skfAsrhrSRMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIgTQCkCYA0AZAmANIEQJoASBMAaQIg7R8+YGdRhle/aAAAAABJRU5ErkJggg=="
-ICON_512_B64 = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAJz0lEQVR4nO3au4peZRiG4Xd2TuImwUKjkGARN8E0YhQ0EQsbC1MJtmJhl0MwnoOVvWdgIYJ2GgIDIhIRY5xKLQQ1AUPAZGbyj0VA8ACcH7yvq/yqp1mLey2+lYtnr+8PAJCyuuwBAMDBEwAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAEDE6xfunzPnN/919s4HD81jT64taRGwTOvLHgAcjGuXd+altw7N15/cmZmZ+w6vzNFjq3Pho6Nz9dLOLO7OrK3PnHrlvnn/3I0lrwX+awIAIn7+dm/efG99VtdmFndnTr64Mdtbu3P71v5sb+3OVx/fmTPnN+eBh/0YhAJPOkQsFjO/fLc3J07f6/5nzm7M1Uu78+dvi9nbmTlxen1u/rGYm78vlrwUOAgCAEJ+uLwzT728MTMzx0+vz09Xdmdm5spnd+bVtw/N9tbuMucBB0gAQMj21u6cfGFjHn96bX79cW8Wd++dP//G5nzz6c6cOrex3IHAgREAEHL71v7s3t6fM+c35+qX9772jz66OhubK/P9Fztz5NjqHHnEawEKXAKEmGuXd+e1dw/P5x/+NTMzx59dn1s3FvPEcw/O2vr8c0cA+H9buXj2+v6yRwAAB8u/PgAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACBIAABAkAAAgCABAABBAgAAggQAAAQJAAAIEgAAECQAACDob0lXadGQCd1kAAAAAElFTkSuQmCC"
-
-# --- VAPID KEYS ---
-VAPID_PUBLIC_KEY = "BC2EkkzHG1EPz_akF0s-Fy8CIHFE0Wl6TGWsexqRojEyEh0rjDfKRSqev2HY86U1PBMK2KGnSItpJ_69oKFCshA"
-VAPID_PRIVATE_B64 = "DCxSVC_1bZciFroQkmmL6nejqkjSM_cxtPf4CXKN8V8"
-VAPID_SUBJECT = "mailto:vendieuro@example.com"
-
-SUBS_FILE = "/tmp/subs.json"
-latest_signals = []
-prev_signals = {}
-subscriptions = []
-
-def load_subs():
-    global subscriptions
-    try:
-        if os.path.exists(SUBS_FILE):
-            with open(SUBS_FILE, 'r') as f:
-                subscriptions = json.load(f)
-    except: subscriptions = []
-
-def save_subs():
-    try:
-        with open(SUBS_FILE, 'w') as f:
-            json.dump(subscriptions, f)
-    except: pass
-
-load_subs()
-
-# --- VAPID JWT ---
-try:
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import ec, utils
-    HAS_CRYPTO=True
-    print('crypto ok')
-except Exception as e:
-    HAS_CRYPTO=False
-    print(f'crypto missing {e}')
-    hashes=None; ec=None; utils=None
-
-def b64url_encode(b): return base64.urlsafe_b64encode(b).decode().rstrip("=")
-def b64url_decode(s):
-    s += "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s)
-
-if HAS_CRYPTO:
-    priv_bytes = b64url_decode(VAPID_PRIVATE_B64)
-    priv_int = int.from_bytes(priv_bytes, 'big')
-    private_key_obj = ec.derive_private_key(priv_int, ec.SECP256R1())
-else:
-    private_key_obj=None
-
-def create_vapid_token(aud):
-    if not HAS_CRYPTO:
-        return 'dummy'
-
-    import json as js
-    header = {"typ":"JWT","alg":"ES256"}
-    payload = {"aud": aud, "exp": int(time.time())+86400, "sub": VAPID_SUBJECT}
-    hb = b64url_encode(js.dumps(header, separators=(',',':')).encode())
-    pb = b64url_encode(js.dumps(payload, separators=(',',':')).encode())
-    signing_input = f"{hb}.{pb}".encode()
-    der_sig = private_key_obj.sign(signing_input, ec.ECDSA(hashes.SHA256()))
-    r, s = utils.decode_dss_signature(der_sig)
-    raw = r.to_bytes(32,'big') + s.to_bytes(32,'big')
-    sb = b64url_encode(raw)
-    return f"{hb}.{pb}.{sb}"
-
-def send_push_no_payload(sub):
-    if not HAS_CRYPTO:
-        print('push skipped no crypto')
-        return True
-    try:
-        from urllib.parse import urlparse
-        endpoint = sub.get('endpoint','')
-        if not endpoint: return False
-        parsed = urlparse(endpoint)
-        aud = f"{parsed.scheme}://{parsed.netloc}"
-        token = create_vapid_token(aud)
-        headers = {
-            "Authorization": f"vapid t={token}, k={VAPID_PUBLIC_KEY}",
-            "TTL": "60",
-            "Content-Length": "0"
-        }
-        if HAS_REQUESTS:
-            r = requests.post(endpoint, headers=headers, timeout=8)
-            status = r.status_code
-            text = r.text[:200] if hasattr(r,'text') else ''
-        else:
-            # fallback urllib
-            req = _urllib.Request(endpoint, data=b'', headers=headers, method='POST')
-            try:
-                with _urllib.urlopen(req, timeout=8) as resp:
-                    status = resp.getcode()
-                    text = ''
-            except _uerror.HTTPError as he:
-                status = he.code
-                text = ''
-            except Exception as e:
-                print(f'push urllib error {e}')
-                return True
-        # print(f"push status {status}")
-        r_status = status
-        if False:
-            r = None
-        
-        if r_status in [404,410]:
-            return False
-        return r_status in [200,201,202,204]
-    except Exception as e:
-        print(f"push error {e}")
-        return True
-
-def send_push_to_all():
-    global subscriptions
-    to_keep=[]
-    for sub in subscriptions:
-        ok = send_push_no_payload(sub)
-        if ok is not False:
-            to_keep.append(sub)
-    if len(to_keep)!=len(subscriptions):
-        subscriptions=to_keep
-        save_subs()
-
-# --- TRADING LOGIC (python replica of JS) ---
-def fetch_klines(symbol, interval='1h', limit=150):
-    urls=[
-        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    ]
-    for u in urls:
-        try:
-            if HAS_REQUESTS:
-                r=requests.get(u, timeout=6)
-                if r.status_code==200:
-                    j=r.json()
-                    if j and isinstance(j,list) and len(j)>0 and not (isinstance(j,dict) and 'code' in j):
-                        return j
-            else:
-                with _urllib.urlopen(u, timeout=6) as resp:
-                    data=resp.read().decode()
-                    j=json.loads(data)
-                    if j and isinstance(j,list) and len(j)>0:
-                        return j
-        except Exception as e:
-            # print(f"fetch fail {u} {e}")
-            pass
-    return []
-
-def calc_rsi(prices, period=14):
-    if len(prices)<period+1: return 50
-    gains=0; losses=0
-    for i in range(1, period+1):
-        d=prices[i]-prices[i-1]
-        if d>=0: gains+=d
-        else: losses-=d
-    ag=gains/period; al=losses/period
-    if al==0: return 85
-    for i in range(period+1, len(prices)):
-        d=prices[i]-prices[i-1]
-        gg=d if d>0 else 0
-        ll=-d if d<0 else 0
-        ag=(ag*(period-1)+gg)/period
-        al=(al*(period-1)+ll)/period
-    if al==0: return 85
-    rs=ag/al
-    return 100-100/(1+rs)
-
-def calc_ema(prices, period):
-    k=2/(period+1)
-    ema=prices[0]
-    for p in prices[1:]:
-        ema=p*k+ema*(1-k)
-    return ema
-
-def calc_conf(stato, rsi, ema20, ema50, volLabel):
-    c=50; reasons=[]
-    if stato=='COMPRA':
-        if rsi<25: c+=28; reasons.append('Ipervenduto')
-        elif rsi<35: c+=18; reasons.append('RSI basso')
-        elif rsi>60: c-=12; reasons.append('RSI alto')
-        if ema20>ema50: c+=14; reasons.append('Rialzista')
-        else: c-=14; reasons.append('Contro-trend')
-        if volLabel=='VOL ALTO': c+=14; reasons.append('Vol alto')
-        elif volLabel=='VOL BASSO': c-=16; reasons.append('Vol basso')
-    elif stato=='VENDI':
-        if rsi>75: c+=28; reasons.append('Ipercomprato')
-        elif rsi>65: c+=18; reasons.append('RSI alto')
-        elif rsi<40: c-=12; reasons.append('RSI basso')
-        if ema20<ema50: c+=14; reasons.append('Ribassista')
-        else: c-=14; reasons.append('Contro-trend')
-        if volLabel=='VOL ALTO': c+=14; reasons.append('Vol alto')
-        elif volLabel=='VOL BASSO': c-=16; reasons.append('Vol debole')
-    else:
-        c=45+abs(rsi-50)/2; reasons.append('Laterale')
-    conf=max(12,min(94, round(c)))
-    return conf, reasons
-
-def check_coins():
-    global latest_signals, prev_signals
-    configs=[
-        ('BTCEUR',['BTCEUR']),
-        ('ETHEUR',['ETHEUR']),
-        ('PAXGEUR',['PAXGEUR','PAXGUSDT'])
-    ]
-    new_signals=[]
-    for label, fallbacks in configs:
-        kl=None; used=None
-        for sym in fallbacks:
-            kl=fetch_klines(sym,'1h',150)
-            if kl and len(kl)>30:
-                used=sym; break
-        if not kl: continue
-        closes=[float(c[4]) for c in kl]
-        vols=[float(c[5]) for c in kl]
-        # EUR/USDT conversion if needed
-        if used and used.endswith('USDT'):
-            try:
-                eur_kl=fetch_klines('EURUSDT','1h',2)
-                if eur_kl:
-                    rate=float(eur_kl[-1][4])
-                    closes=[p/rate for p in closes]
-            except: pass
-        price=closes[-1]
-        rsi=calc_rsi(closes,14)
-        ema20=calc_ema(closes,20)
-        ema50=calc_ema(closes,50)
-        vol_now=vols[-1]; vol_avg=sum(vols[-21:-1])/20 if len(vols)>21 else vol_now
-        if vol_now < vol_avg*0.7: volLabel='VOL BASSO'
-        elif vol_now > vol_avg*1.9: volLabel='VOL ALTO'
-        else: volLabel='VOL NORMALE'
-        trend='Rialzista' if ema20>ema50 else 'Ribassista'
-        stato='FERMO'
-        if rsi>70: stato='VENDI'
-        elif rsi<30: stato='COMPRA'
-        elif ema20>ema50 and rsi>55: stato='COMPRA'
-        elif ema20<ema50 and rsi<45: stato='VENDI'
-        conf, reasons = calc_conf(stato, rsi, ema20, ema50, volLabel)
-        if conf>=60 and stato in ('COMPRA','VENDI'):
-            key=f"{label}_1h"
-            if prev_signals.get(key)!=stato:
-                new_signals.append({
-                    'sym': label,
-                    'stato': stato,
-                    'conf': conf,
-                    'price': price,
-                    'reason': reasons[0] if reasons else '',
-                    'rsi': round(rsi,1),
-                    'time': int(time.time()*1000)
-                })
-                prev_signals[key]=stato
-    if new_signals:
-        latest_signals = new_signals + latest_signals
-        latest_signals = latest_signals[:20]
-        print(f"NEW SIGNALS {new_signals} -> pushing to {len(subscriptions)} subs")
-        send_push_to_all()
-    else:
-        print(f"check {datetime.now()} no new signal")
-
-def checker_loop():
-    while True:
-        try:
-            check_coins()
-        except Exception as e:
-            print(f"checker error {e}")
-        time.sleep(60)
-
-threading.Thread(target=checker_loop, daemon=True).start()
-
-# --- HTML APP ---
-HTML = """<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#7c3aed">
-<link rel="manifest" href="/manifest.json"><link rel="icon" href="/icon-192.png">
-<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
-<style>:root{--bg:#070b18;--card:#131a2e;--card2:#0a1020;--border:#1e2a4a;--text:#e2e8f0;--muted:#94a3b8}.light{--bg:#f1f5f9;--card:#fff;--card2:#f8fafc;--border:#e2e8f0;--text:#0f172a;--muted:#64748b}*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:system-ui;padding:12px;padding-bottom:90px} .header{position:sticky;top:0;z-index:20;background:var(--bg);padding:10px 0;margin:-12px -12px 14px;padding-left:12px;padding-right:12px;border-bottom:1px solid var(--border)}.h-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.logo{width:42px;height:42px;background:linear-gradient(135deg,#7c3aed,#3b82f6);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff}.btn{border:none;padding:7px 11px;border-radius:20px;font-weight:700;cursor:pointer;font-size:12px}.btn-install{background:var(--text);color:var(--bg)}.btn-icon{background:var(--card);color:var(--text);border:1px solid var(--border)}.btn-icon.on{background:#10b981;color:#000}.tf-bar{display:flex;gap:6px;overflow-x:auto;margin-top:10px}.tf{padding:6px 14px;border-radius:20px;background:var(--card);border:1px solid var(--border);color:var(--muted);font-weight:700;font-size:13px;cursor:pointer}.tf.active{background:var(--text);color:var(--bg)}.card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:14px;margin-bottom:12px}.price{font-size:26px;font-weight:900}.badge{padding:5px 10px;border-radius:20px;font-weight:900;font-size:11px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}.mini{font-size:10px;opacity:.6;text-transform:uppercase;color:var(--muted)}.val{font-size:13px;font-weight:800;display:block;margin-top:2px}.conf-bar{height:6px;background:var(--card2);border-radius:10px;overflow:hidden;margin-top:6px}.conf-fill{height:100%;border-radius:10px}.chart-wrap{margin-top:12px;background:var(--card2);border-radius:14px;padding:8px;display:none;border:1px solid var(--border)}.chart-wrap.open{display:block}.chart-box{width:100%;height:300px}.btn-chart{background:var(--card2);border:1px solid var(--border);color:var(--muted);width:100%;margin-top:8px;padding:8px;border-radius:20px}.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 20px;border-radius:30px;font-weight:800;z-index:99;display:none;max-width:90%;text-align:center}.hist-table{width:100%;font-size:12px;border-collapse:collapse}.hist-table th{font-size:10px;opacity:.5;text-align:left;padding:6px}.hist-table td{padding:8px 6px;border-top:1px solid var(--border)}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
-#installBanner{display:none;position:fixed;bottom:80px;left:12px;right:12px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;z-index:50;box-shadow:0 10px 30px #0005}
-</style></head><body>
-<div class="header"><div class="h-row"><div class="logo">V€</div><div style="flex:1"><div style="font-weight:900;font-size:14px">Vendi STABILE PUSH</div><div style="font-size:10px;opacity:.6">BTC • ETH • ORO | PUSH VERO | CLICK APRE APP</div></div><button class="btn btn-icon" id="themeBtn">🌙</button><button class="btn btn-icon" id="notifBtn">🔔</button><button class="btn btn-icon" id="soundBtn">🔊</button><button class="btn btn-icon" id="histBtn">📜</button><button class="btn btn-install" id="installBtn" style="display:none">📲 Installa</button></div>
-<div class="tf-bar"><div class="tf" data-tf="5m">5m</div><div class="tf" data-tf="15m">15m</div><div class="tf active" data-tf="1h">1H</div><div class="tf" data-tf="4h">4H</div><div class="tf" data-tf="1d">1D</div></div></div>
-<div id="installBanner"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:900">📲 Installa come App</div><div style="font-size:11px;opacity:.7">Push vero - notifiche anche ad app chiusa</div></div><div style="display:flex;gap:8px"><button class="btn btn-icon" onclick="document.getElementById('installBanner').style.display='none'">✕</button><button class="btn btn-install" id="bannerInstall">Installa</button></div></div></div>
-<div class="card" style="display:flex;align-items:center;gap:12px"><div style="width:44px;height:44px;background:var(--card2);border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid var(--border)">📊</div><div style="flex:1"><div style="font-size:10px;letter-spacing:2px;opacity:.6">GLOBALE</div><div id="globale" style="font-size:17px;font-weight:900;color:#fbbf24">CARICAMENTO...</div><div id="globaleSub" style="font-size:11px;opacity:.6"></div></div><div style="text-align:right"><div style="font-size:9px;opacity:.5">TF</div><div id="tfLabel" style="font-weight:900">1H</div></div></div>
-<div id="coins"></div>
-<div class="card" id="historyCard" style="display:none"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:900">📜 Storico con TF</div><div style="display:flex;gap:6px"><button class="btn btn-icon" onclick="clearHistory()">🗑️</button><button class="btn btn-icon" onclick="document.getElementById('historyCard').style.display='none'">✕</button></div></div><div style="max-height:400px;overflow-y:auto"><table class="hist-table"><thead><tr><th>ORA</th><th>COIN</th><th>SEGNALE</th><th>%</th><th>PREZZO</th><th>TF</th></tr></thead><tbody id="histBody"></tbody></table></div></div>
-<div style="text-align:center;margin-top:10px;font-size:11px;opacity:.4" id="upd"></div><div class="toast" id="toast"></div>
-<script>
-const VAPID_PUBLIC_KEY="BC2EkkzHG1EPz_akF0s-Fy8CIHFE0Wl6TGWsexqRojEyEh0rjDfKRSqev2HY86U1PBMK2KGnSItpJ_69oKFCshA";
-function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const rawData=window.atob(base64);const outputArray=new Uint8Array(rawData.length);for(let i=0;i<rawData.length;++i){outputArray[i]=rawData.charCodeAt(i);}return outputArray;}
-async function subscribePush(){try{if(!('serviceWorker' in navigator) || !('PushManager' in window))return;const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();if(!sub){sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});}await fetch('/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});console.log('Push subscribed OK');showToast('✅ Push vero attivo - anche ad app chiusa');}catch(e){console.error('Push fail',e);showToast('❌ Push non riuscito: '+e.message);}}
-let deferredPrompt=null;
-window.addEventListener('beforeinstallprompt',(e)=>{e.preventDefault();deferredPrompt=e;document.getElementById('installBtn').style.display='inline-block';document.getElementById('installBanner').style.display='block';});
-document.getElementById('installBtn').onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt();let {outcome}=await deferredPrompt.userChoice;if(outcome==='accepted')showToast('✅ App installata!');deferredPrompt=null;document.getElementById('installBtn').style.display='none';document.getElementById('installBanner').style.display='none';}};
-document.getElementById('bannerInstall').onclick=()=>document.getElementById('installBtn').click();
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').then(()=>{console.log('SW ok');}).catch(()=>{});}
-let soundOn=false,notifOn=false,currentTF='1h',prevSignals={},charts={};
-const COIN_CONFIG=[
-  {id:'BTCEUR', label:'BTCEUR', name:'BTC', fallbacks:['BTCEUR']},
-  {id:'ETHEUR', label:'ETHEUR', name:'ETH', fallbacks:['ETHEUR']},
-  {id:'PAXGEUR', label:'PAXGEUR', name:'ORO', fallbacks:['PAXGEUR','PAXGUSDT','PAXGUSDC','XAUTUSDT']}
-];
-const SCAN_TFS=['5m','15m','1h','4h','1d'];
-let audioCtx, historyData=JSON.parse(localStorage.getItem('vendi-history-stabile')||'[]');
-let savedTheme=localStorage.getItem('vendi-theme')||'dark';
-if(savedTheme==='light'){document.body.classList.add('light');}
-document.getElementById('themeBtn').onclick=()=>{if(document.body.classList.contains('light')){document.body.classList.remove('light');localStorage.setItem('vendi-theme','dark');} else {document.body.classList.add('light');localStorage.setItem('vendi-theme','light');}};
-function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500);}
-function pushNotif(title,body){if(!notifOn)return;try{if('serviceWorker' in navigator){navigator.serviceWorker.ready.then(reg=>{reg.showNotification(title,{body,icon:'/icon-192.png',vibrate:[200,100,200],tag:title,data:{url:'/app'}})});} else {new Notification(title,{body});}}catch(e){try{new Notification(title,{body})}catch{}}}
-async function enableNotif(){let p=await Notification.requestPermission();if(p==='granted'){notifOn=true;localStorage.setItem('vendi-notif','on');document.getElementById('notifBtn').classList.add('on');showToast('🔔 Notifiche attive');await subscribePush();}}
-document.getElementById('notifBtn').onclick=()=>{if(notifOn){notifOn=false;localStorage.setItem('vendi-notif','off');document.getElementById('notifBtn').classList.remove('on');} else enableNotif();};
-if(localStorage.getItem('vendi-notif')==='on'){notifOn=true;document.getElementById('notifBtn').classList.add('on');setTimeout(()=>{subscribePush();},2000);}
-function playSound(t){if(!soundOn)return;try{if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);if(t==='COMPRA'){o.frequency.value=880;g.gain.value=0.15;o.start();g.gain.exponentialRampToValueAtTime(0.01,audioCtx.currentTime+0.6);o.stop(audioCtx.currentTime+0.6);} else {o.frequency.value=220;g.gain.value=0.2;o.type='sawtooth';o.start();g.gain.exponentialRampToValueAtTime(0.01,audioCtx.currentTime+0.8);o.stop(audioCtx.currentTime+0.8);}}catch{}}
-document.getElementById('soundBtn').onclick=()=>{soundOn=!soundOn;const b=document.getElementById('soundBtn');if(soundOn){b.classList.add('on');if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();audioCtx.resume();localStorage.setItem('vendi-sound','on');} else {b.classList.remove('on');localStorage.setItem('vendi-sound','off');}};
-if(localStorage.getItem('vendi-sound')==='on'){soundOn=true;document.getElementById('soundBtn').classList.add('on');}
-document.getElementById('histBtn').onclick=()=>{const c=document.getElementById('historyCard');c.style.display=c.style.display==='none'?'block':'none';renderHistory();};
-function clearHistory(){if(confirm('Pulire?')){historyData=[];localStorage.setItem('vendi-history-stabile','[]');renderHistory();}}
-function addHistory(sym,stato,conf,price,reasons,tf){
- if(conf<60) return;
- const last = historyData[0];
- if(last && last.sym===sym && last.stato===stato && last.tf===tf && Date.now()-last.time<300000) return;
- historyData.unshift({time:Date.now(),sym,stato,conf,price,reasons:reasons[0]||'',tf:tf||currentTF});
- if(historyData.length>200)historyData.pop();
- localStorage.setItem('vendi-history-stabile',JSON.stringify(historyData));renderHistory();
-}
-function renderHistory(){
- const tb=document.getElementById('histBody');
- let filtered=historyData.filter(h=>h.conf>=60);
- if(!filtered.length){tb.innerHTML='<tr><td colspan=6 style="text-align:center;opacity:.5;padding:20px">Nessun segnale</td></tr>';return;}
- tb.innerHTML=filtered.slice(0,80).map(h=>{
-  const d=new Date(h.time);const t=d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
-  const col=h.stato==='COMPRA'?'#10b981':h.stato==='VENDI'?'#ef4444':'#fbbf24';
-  const tfLabel=(h.tf||'').toUpperCase();
-  return `<tr><td>${t}</td><td><b>${h.sym}</b></td><td><span class="dot" style="background:${col}"></span>${h.stato}</td><td>${h.conf}%</td><td>€${h.price.toFixed(2)}</td><td><b>${tfLabel}</b></td></tr>`;
- }).join('');
-}
-document.querySelectorAll('.tf').forEach(el=>{el.onclick=()=>{document.querySelectorAll('.tf').forEach(x=>x.classList.remove('active'));el.classList.add('active');currentTF=el.dataset.tf;document.getElementById('tfLabel').textContent=currentTF.toUpperCase();refresh();};});
-function calcRSI(p,period=14){if(p.length<period+1)return 50;let g=0,l=0;for(let i=1;i<=period;i++){let d=p[i]-p[i-1];if(d>=0)g+=d;else l-=d;}let ag=g/period,al=l/period;if(al===0)return 85;for(let i=period+1;i<p.length;i++){let d=p[i]-p[i-1];let gg=d>0?d:0,ll=d<0?-d:0;ag=(ag*(period-1)+gg)/period;al=(al*(period-1)+ll)/period;}return 100-100/(1+ag/al);}
-function calcEMA(p,period){let k=2/(period+1);let ema=p[0];for(let i=1;i<p.length;i++)ema=p[i]*k+ema*(1-k);return ema;}
-function calcEMAArray(p,period){let k=2/(period+1);let ema=p[0];let arr=[ema];for(let i=1;i<p.length;i++){ema=p[i]*k+ema*(1-k);arr.push(ema);}return arr;}
-function calcConfidence(o){let c=50,r=[];if(o.stato==='COMPRA'){if(o.rsi<25){c+=28;r.push('Ipervenduto');} else if(o.rsi<35){c+=18;r.push('RSI basso');} else if(o.rsi>60){c-=12;r.push('RSI alto');}if(o.ema20>o.ema50){c+=14;r.push('Rialzista');} else {c-=14;r.push('Contro-trend');}if(o.volLabel==='VOL ALTO'){c+=14;r.push('Vol alto');} else if(o.volLabel==='VOL BASSO'){c-=16;r.push('Vol basso');}} else if(o.stato==='VENDI'){if(o.rsi>75){c+=28;r.push('Ipercomprato');} else if(o.rsi>65){c+=18;r.push('RSI alto');} else if(o.rsi<40){c-=12;r.push('RSI basso');}if(o.ema20<o.ema50){c+=14;r.push('Ribassista');} else {c-=14;r.push('Contro-trend');}if(o.volLabel==='VOL ALTO'){c+=14;r.push('Vol alto');} else if(o.volLabel==='VOL BASSO'){c-=16;r.push('Vol debole');}} else {c=45+(Math.abs(o.rsi-50)/2);r.push('Laterale');}return {conf:Math.max(12,Math.min(94,Math.round(c))),reasons:r};}
-async function fetchKlines(sym,interval,limit=150){const urls=[`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`,`https://data-api.binance.vision/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`];for(let u of urls){try{let r=await fetch(u);if(!r.ok)continue;let j=await r.json();if(j && j.length && !j.code)return j;}catch{} }return [];}
-async function getEurUsdtRate(){try{let kl=await fetchKlines('EURUSDT','1h',2);if(kl.length) return parseFloat(kl[kl.length-1][4]);}catch{} return 1.08;}
-async function loadCoinForTF(cfg, tf){
- try{
-  let kl=null, usedSymbol=null;
-  for(let sym of cfg.fallbacks){kl=await fetchKlines(sym,tf,150);if(kl && kl.length){usedSymbol=sym;break;}}
-  if(!kl || !kl.length) return null;
-  let closes=kl.map(c=>parseFloat(c[4]));let volumes=kl.map(c=>parseFloat(c[5]));
-  if(usedSymbol && usedSymbol.endsWith('USDT')){let rate=await getEurUsdtRate();closes=closes.map(p=>p/rate);kl=kl.map(c=>{let nc=[...c]; nc[1]=(parseFloat(c[1])/rate).toString(); nc[2]=(parseFloat(c[2])/rate).toString(); nc[3]=(parseFloat(c[3])/rate).toString(); nc[4]=(parseFloat(c[4])/rate).toString(); return nc;});}
-  let price=closes[closes.length-1]; let rsi=calcRSI(closes,14);let ema20=calcEMA(closes,20);let ema50=calcEMA(closes,50);
-  let volNow=volumes[volumes.length-1];let volAvg=volumes.slice(-21,-1).reduce((a,b)=>a+b,0)/20;
-  let volLabel=volNow < volAvg*0.7 ? 'VOL BASSO' : volNow > volAvg*1.9 ? 'VOL ALTO' : 'VOL NORMALE';
-  let trend=ema20>ema50?'Rialzista':'Ribassista';let stato='FERMO',col='#fbbf24',tc='#000';
-  if(rsi>70){stato='VENDI';col='#ef4444';tc='#fff';} else if(rsi<30){stato='COMPRA';col='#10b981';} else if(ema20>ema50 && rsi>55){stato='COMPRA';col='#10b981';} else if(ema20<ema50 && rsi<45){stato='VENDI';col='#ef4444';tc='#fff';}
-  let cr=calcConfidence({stato,rsi,ema20,ema50,volLabel,price});
-  if(cr.conf>=60 && (stato==='COMPRA'||stato==='VENDI')){
-    const key=cfg.id+'_'+tf;
-    if(!prevSignals[key] || prevSignals[key]!==stato){
-      const lastSame=historyData.find(h=>h.sym===cfg.label && h.tf===tf && h.stato===stato);
-      const canNotify=!lastSame || (Date.now()-lastSame.time>600000);
-      if(canNotify){addHistory(cfg.label,stato,cr.conf,price,cr.reasons,tf); playSound(stato); pushNotif(`${cfg.label}: ${stato} ${cr.conf}% [${tf.toUpperCase()}]`,`€${price.toFixed(2)} - ${cr.reasons[0]||''}`); showToast(`${cfg.label} ${stato} ${cr.conf}% su ${tf.toUpperCase()}`);}
-    }
-    prevSignals[key]=stato;
-  }
-  return {sym:cfg.label,displayName:cfg.name,price,rsi,ema20,ema50,trend,stato,col,tc,volLabel,conf:cr.conf,reasons:cr.reasons,kl,usedSymbol};
- }catch(e){return null;}
-}
-async function loadCoin(cfg){return await loadCoinForTF(cfg,currentTF);}
-function renderCandle(id,kl){
- const container=document.getElementById('chart-'+id);if(!container)return;container.innerHTML='';const chart=LightweightCharts.createChart(container,{width:container.clientWidth,height:300,layout:{background:{type:'solid',color:'transparent'},textColor:getComputedStyle(document.body).getPropertyValue('--muted')},grid:{vertLines:{color:getComputedStyle(document.body).getPropertyValue('--border')},horzLines:{color:getComputedStyle(document.body).getPropertyValue('--border')}},rightPriceScale:{borderColor:getComputedStyle(document.body).getPropertyValue('--border')},timeScale:{borderColor:getComputedStyle(document.body).getPropertyValue('--border')}});
- const candleSeries=chart.addCandlestickSeries({upColor:'#10b981',downColor:'#ef4444',borderVisible:false,wickUpColor:'#10b981',wickDownColor:'#ef4444'});
- const data=kl.map(k=>({time:Math.floor(k[0]/1000),open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4])}));candleSeries.setData(data);
- const closes=kl.map(k=>parseFloat(k[4]));const ema20Arr=calcEMAArray(closes,20);const ema50Arr=calcEMAArray(closes,50);
- const ema20Line=chart.addLineSeries({color:'#3b82f6',lineWidth:1});ema20Line.setData(data.map((d,i)=>({time:d.time,value:ema20Arr[i]})).filter((_,i)=>i>=20));
- const ema50Line=chart.addLineSeries({color:'#f59e0b',lineWidth:1});ema50Line.setData(data.map((d,i)=>({time:d.time,value:ema50Arr[i]})).filter((_,i)=>i>=50));
- chart.timeScale().fitContent();charts[id]={chart};
-}
-async function refresh(){
- let html='',segnali=[];let results=await Promise.all(COIN_CONFIG.map(c=>loadCoin(c)));results=results.filter(Boolean);
- results.sort((a,b)=>{let order={'BTCEUR':0,'ETHEUR':1,'PAXGEUR':2};return (order[a.sym]??99)-(order[b.sym]??99);});
- for(let d of results){
-  segnali.push(d.stato); let name=d.displayName; let confColor=d.conf>=75?'#10b981':d.conf>=55?'#fbbf24':'#ef4444';
-  let badgeExtra=d.usedSymbol && d.usedSymbol!==d.sym ? ` <span style="font-size:9px;opacity:.6">(${d.usedSymbol}→€)</span>` : '';
-  html+=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;gap:10px;align-items:center"><div style="width:42px;height:42px;background:var(--card2);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:900;border:1px solid var(--border)">${name[0]}</div><div><div style="font-weight:900">${d.sym}${badgeExtra}</div><div style="font-size:11px;opacity:.6">${name} • ${d.volLabel}</div></div></div><div style="text-align:right"><div class="badge" style="background:${d.col};color:${d.tc}">${d.stato}</div><div style="font-size:11px;margin-top:4px;font-weight:800;color:${confColor}">${d.conf}%</div></div></div><div class="price" style="margin:10px 0">€${d.price.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div style="display:flex;justify-content:space-between;font-size:11px"><span style="opacity:.6">${d.reasons.slice(0,2).join(' • ')}</span><span style="font-weight:800;color:${confColor}">${d.conf}% affidabile</span></div><div class="conf-bar"><div class="conf-fill" style="width:${d.conf}%;background:${confColor}"></div></div><div class="grid3"><div class="card" style="margin:0;background:var(--card2)"><div class="mini">RSI</div><span class="val">${d.rsi.toFixed(1)}</span></div><div class="card" style="margin:0;background:var(--card2)"><div class="mini">EMA</div><span class="val" style="color:${d.trend==='Rialzista'?'#10b981':'#ef4444'}">${d.trend}</span></div><div class="card" style="margin:0;background:var(--card2)"><div class="mini">Vol</div><span class="val">${d.volLabel.replace('VOL ','')}</span></div></div><div style="display:flex;gap:6px"><button class="btn btn-chart" style="flex:1" onclick="toggleChart('${d.sym}')">🕯️ Candele</button></div><div class="chart-wrap" id="wrap-${d.sym}"><div class="chart-box" id="chart-${d.sym}"></div></div></div>`;
- }
- document.getElementById('coins').innerHTML=html || '<div class="card" style="text-align:center;opacity:.5">Caricamento...</div>';
- let comp=segnali.filter(s=>s==='COMPRA').length,vend=segnali.filter(s=>s==='VENDI').length;
- let glob=document.getElementById('globale'),sub=document.getElementById('globaleSub');
- let total=COIN_CONFIG.length;
- if(comp>=2){glob.textContent='COMPRA';glob.style.color='#10b981';sub.textContent=comp+'/'+total+' COMPRA';}
- else if(vend>=2){glob.textContent='VENDI';glob.style.color='#ef4444';sub.textContent=vend+'/'+total+' VENDI';}
- else {glob.textContent='FERMO';glob.style.color='#fbbf24';sub.textContent='Laterale';}
- document.getElementById('upd').textContent='Agg: '+new Date().toLocaleTimeString('it-IT')+' • TF:'+currentTF.toUpperCase()+' • PUSH VERO';
- setTimeout(async ()=>{for(let tf of SCAN_TFS){if(tf===currentTF) continue; for(let cfg of COIN_CONFIG){await loadCoinForTF(cfg,tf); await new Promise(r=>setTimeout(r,300));}} },2000);
-}
-function toggleChart(sym){
-  const wrap=document.getElementById('wrap-'+sym); if(!wrap) return;
-  const isOpen=wrap.classList.contains('open');
-  document.querySelectorAll('.chart-wrap').forEach(w=>w.classList.remove('open'));
-  if(!isOpen){
-    wrap.classList.add('open');
-    const cfg=COIN_CONFIG.find(c=>c.label===sym);
-    if(cfg){loadCoinForTF(cfg,currentTF).then(d=>{if(d && d.kl) renderCandle(sym,d.kl);});}
-  }
-}
-refresh();setInterval(refresh,60000);renderHistory();
-// handle ?sym param to highlight
-const urlParams=new URLSearchParams(window.location.search);
-const symParam=urlParams.get('sym');
-if(symParam){setTimeout(()=>{document.getElementById('coins')?.scrollIntoView();},1000);}
-</script></body></html>
+Genera le chiavi VAPID una volta con:
+python -c "from py_vapid import Vapid; v=Vapid(); v.generate_keys(); print('PUBLIC:', v.public_key_base64()); print('PRIVATE:', v.private_pem_base64())"
 """
 
-@app.route("/")
-def home():
-    return '<a href="/app">Vai alla versione PUSH VERO</a>'
+import os
+import json
+import time
+import threading
+import requests
+from datetime import datetime
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
 
-@app.route("/app")
-def app_route():
-    return Response(HTML, mimetype="text/html")
+# Config
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U6_Q")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:test@test.com")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-@app.route("/manifest.json")
-def manifest():
-    data={
-        "name":"Vendi STABILE PUSH VERO",
-        "short_name":"Vendi€ PUSH",
-        "id":"/app",
-        "scope":"/",
-        "start_url":"/app",
-        "display":"standalone",
-        "display_override":["window-controls-overlay","standalone"],
-        "launch_handler":{"client_mode":["focus-existing","auto"]},
-        "background_color":"#070b18",
-        "theme_color":"#7c3aed",
-        "icons":[
-            {"src":"/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-            {"src":"/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
-        ]
-    }
-    return Response(json.dumps(data), mimetype="application/json")
+SUBS_FILE = "subscriptions.json"
+LAST_SIGNALS_FILE = "last_signals.json"
+
+app = Flask(__name__)
+CORS(app)
+
+# --- STORAGE ---
+def load_json(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
+    except: pass
+    return default
+
+def save_json(path, data):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Save error {path}: {e}")
+
+subscriptions = load_json(SUBS_FILE, [])
+last_signals = load_json(LAST_SIGNALS_FILE, {})  # { "BTCEUR_4h": "FERMO", ... }
+
+# --- BINANCE ---
+SYMBOLS = {
+    "BTC": "BTCEUR",
+    "ETH": "ETHEUR", 
+    "ORO": "PAXGEUR",  # Oro = PAXG
+    "PAXG": "PAXGEUR"
+}
+
+TF_MAP = {
+    "5m": "5m",
+    "15m": "15m",
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1d"
+}
+
+def get_klines(symbol, interval, limit=100):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        closes = [float(c[4]) for c in data]
+        return closes
+    except Exception as e:
+        print(f"Klines error {symbol} {interval}: {e}")
+        return None
+
+def calc_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50
+    gains = 0
+    losses = 0
+    for i in range(1, period+1):
+        diff = prices[-i] - prices[-i-1]
+        if diff >=0:
+            gains += diff
+        else:
+            losses -= diff
+    if losses == 0:
+        return 100 if gains>0 else 50
+    rs = gains / losses
+    # Wilder smoothing simplified
+    for i in range(len(prices)-period-1, 0, -1):
+        diff = prices[i+period] - prices[i+period-1] if i+period < len(prices) else 0
+        if diff>=0:
+            gains = (gains*(period-1)+diff)/period
+            losses = (losses*(period-1))/period
+        else:
+            gains = (gains*(period-1))/period
+            losses = (losses*(period-1)-diff)/period
+        if losses==0:
+            return 100
+        rs = gains/losses
+    rsi = 100 - (100/(1+rs))
+    return round(rsi,2)
+
+def get_signal_from_rsi(rsi):
+    if rsi <= 30:
+        return "COMPRA"
+    if rsi >= 70:
+        return "VENDI"
+    return "FERMO"
+
+def get_all_signals(tf="4H"):
+    interval = TF_MAP.get(tf, "4h")
+    results = {}
+    globale = "FERMO"
+    for name, binance_symbol in SYMBOLS.items():
+        closes = get_klines(binance_symbol, interval)
+        if closes is None:
+            results[name] = {"symbol": binance_symbol, "rsi": 0, "signal": "ERRORE", "price": 0}
+            continue
+        rsi = calc_rsi(closes)
+        signal = get_signal_from_rsi(rsi)
+        results[name] = {
+            "symbol": binance_symbol,
+            "rsi": rsi,
+            "signal": signal,
+            "price": closes[-1],
+            "tf": tf
+        }
+        if signal in ["COMPRA","VENDI"]:
+            globale = signal
+    return {"coins": results, "globale": globale, "tf": tf, "updated": datetime.now().strftime("%H:%M:%S")}
+
+# --- PUSH ---
+def send_push_to_all(title, body, url="/app", coin="BTC", tf="4H", tag="signal"):
+    if not subscriptions:
+        print("Nessun abbonato push")
+        return 0
+    if not VAPID_PRIVATE_KEY:
+        print("VAPID_PRIVATE_KEY mancante!")
+        return 0
+    
+    from pywebpush import webpush, WebPushException
+    
+    success = 0
+    to_remove = []
+    payload = json.dumps({
+        "title": f"[SERVER] {title}",
+        "body": body,
+        "url": f"{url}?coin={coin}&tf={tf}",
+        "coin": coin,
+        "tf": tf,
+        "icon": "https://cdn-icons-png.flaticon.com/512/138/138292.png",
+        "tag": tag
+    })
+    
+    for sub in subscriptions:
+        try:
+            webpush(
+                subscription_info=sub,
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_SUBJECT}
+            )
+            success +=1
+        except WebPushException as ex:
+            print(f"Push fallita: {ex}")
+            if ex.response and ex.response.status_code in [404,410]:
+                to_remove.append(sub)
+        except Exception as e:
+            print(f"Errore push generico: {e}")
+    
+    # pulizia sub scadute
+    if to_remove:
+        for r in to_remove:
+            if r in subscriptions:
+                subscriptions.remove(r)
+        save_json(SUBS_FILE, subscriptions)
+    
+    # Telegram fallback
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            tg_text = f"🔔 {title}\n{body}\n{url}?coin={coin}&tf={tf}"
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                          json={"chat_id": TELEGRAM_CHAT_ID, "text": tg_text}, timeout=5)
+        except Exception as e:
+            print(f"Telegram error: {e}")
+    
+    print(f"Push inviate: {success}/{len(subscriptions)}")
+    return success
+
+def background_checker():
+    print("Background checker PUSH VERO avviato")
+    while True:
+        try:
+            for tf in ["5m","15m","1H","4H","1D"]:
+                data = get_all_signals(tf)
+                for coin_name, info in data["coins"].items():
+                    key = f"{coin_name}_{tf}"
+                    new_sig = info["signal"]
+                    old_sig = last_signals.get(key, "FERMO")
+                    
+                    # Invia solo se passa da FERMO a COMPRA/VENDI o cambia direzione
+                    if new_sig in ["COMPRA","VENDI"] and new_sig != old_sig:
+                        title = f"{coin_name}: {new_sig} {tf}"
+                        body = f"RSI {info['rsi']} - Prezzo {info['price']:.2f}€ - TF {tf}"
+                        print(f"NUOVO SEGNALE {key}: {old_sig} -> {new_sig}")
+                        send_push_to_all(title, body, coin=coin_name, tf=tf, tag=key)
+                    
+                    last_signals[key] = new_sig
+                
+                save_json(LAST_SIGNALS_FILE, last_signals)
+                time.sleep(2)  # evita rate limit binance
+            
+            print(f"[{datetime.now()}] Check completato, dormo 60s")
+            time.sleep(60)
+        except Exception as e:
+            print(f"Errore loop checker: {e}")
+            time.sleep(30)
+
+# --- ROUTES ---
+@app.route("/api/ping")
+def ping():
+    return jsonify({"ok": True, "time": datetime.now().isoformat(), "subs": len(subscriptions)})
+
+@app.route("/api/signals")
+def signals():
+    tf = request.args.get("tf", "4H")
+    try:
+        data = get_all_signals(tf)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e), "coins": {}, "globale": "ERRORE"}), 500
+
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "subscriptions": len(subscriptions),
+        "last_signals": last_signals,
+        "vapid_configured": bool(VAPID_PRIVATE_KEY),
+        "telegram_configured": bool(TELEGRAM_TOKEN),
+        "now": datetime.now().isoformat()
+    })
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def subscribe():
+    sub = request.get_json()
+    if not sub or "endpoint" not in sub:
+        return jsonify({"error": "invalid sub"}), 400
+    # evita duplicati
+    if sub not in subscriptions:
+        subscriptions.append(sub)
+        save_json(SUBS_FILE, subscriptions)
+        print(f"Nuovo abbonato: {sub['endpoint'][:50]}...")
+    return jsonify({"ok": True, "count": len(subscriptions)})
+
+@app.route("/api/push/test", methods=["POST"])
+def test_push():
+    coin = request.json.get("coin","BTC") if request.is_json else "BTC"
+    tf = request.json.get("tf","4H") if request.is_json else "4H"
+    send_push_to_all(f"TEST {coin} COMPRA", f"Questa è una prova PUSH VERO SERVER - TF {tf} - Se la vedi ad app chiusa, funziona!", coin=coin, tf=tf, tag="test")
+    return jsonify({"ok": True, "sent_to": len(subscriptions)})
 
 @app.route("/sw.js")
 def sw():
-    js="""
-self.addEventListener('install',e=>self.skipWaiting());
-self.addEventListener('activate',e=>{
-  e.waitUntil(self.clients.claim());
-});
-self.addEventListener('push', event=>{
-  event.waitUntil(
-    fetch('/api/latest').then(r=>r.json()).then(d=>{
-      if(!d.signals || !d.signals.length){
-        return self.registration.showNotification('Vendi€ PUSH', {body:'Controllo completato - nessun segnale forte', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}, vibrate:[200,100,200]});
-      }
-      const s=d.signals[0];
-      const title=`${s.sym}: ${s.stato} ${s.conf}%`;
-      const body=`€${s.price.toFixed(2)} - ${s.reason} - RSI ${s.rsi} - TAP PER APRIRE APP`;
-      return self.registration.showNotification(title, {body, icon:'/icon-192.png', badge:'/icon-192.png', data:{url:`/app?sym=${s.sym}`}, tag:s.sym, renotify:true, vibrate:[200,100,200], requireInteraction:true});
-    }).catch(()=>self.registration.showNotification('Vendi€ PUSH', {body:'Nuovo segnale! Tap per aprire APP', icon:'/icon-192.png', badge:'/icon-192.png', data:{url:'/app'}}))
-  );
-});
-self.addEventListener('notificationclick', event=>{
-  event.notification.close();
-  const rawUrl = event.notification.data && event.notification.data.url || '/app';
-  const fullUrl = new URL(rawUrl, self.location.origin).href;
-  event.waitUntil(
-    clients.matchAll({type:'window', includeUncontrolled:true}).then(clientList=>{
-      for(let client of clientList){
-        // se c'è già una finestra dell'app, portala in primo piano e naviga lì
-        if(client.url.includes(self.location.origin)){
-          if('focus' in client){
-            if('navigate' in client){
-              client.navigate(fullUrl);
-            }
-            return client.focus();
-          }
-        }
-      }
-      // altrimenti apri l'app installata (se installata apre come app, non chrome)
-      if(clients.openWindow){
-        return clients.openWindow(fullUrl);
-      }
-    })
-  );
-});
-self.addEventListener('fetch', e=>{});
+    # Service Worker con distinzione SERVER
+    js = f"""
+const VAPID_PUBLIC = "{VAPID_PUBLIC_KEY}";
+self.addEventListener('push', function(event) {{
+    let data = {{}};
+    try {{ data = event.data.json(); }} catch(e) {{ data = {{title: 'Vendi STABILE', body: event.data.text()}} }}
+    const title = data.title || 'Vendi STABILE [SERVER]';
+    const options = {{
+        body: data.body || 'Nuovo segnale',
+        icon: data.icon || '/icon.png',
+        badge: '/icon.png',
+        tag: data.tag || 'signal',
+        data: {{ url: data.url || '/app' }},
+        actions: [
+            {{action: 'open', title: 'APRI APP'}},
+            {{action: 'chart', title: 'VEDI GRAFICO'}}
+        ],
+        requireInteraction: true,
+        vibrate: [200, 100, 200]
+    }};
+    event.waitUntil(self.registration.showNotification(title, options));
+}});
+self.addEventListener('notificationclick', function(event) {{
+    event.notification.close();
+    const url = event.notification.data.url || '/app';
+    event.waitUntil(
+        clients.matchAll({{type: 'window'}}).then(windowClients => {{
+            for (let client of windowClients) {{
+                if (client.url.includes('/app') && 'focus' in client) {{
+                    client.navigate(url);
+                    return client.focus();
+                }}
+            }}
+            if (clients.openWindow) return clients.openWindow(url);
+        }})
+    );
+}});
 """
     return Response(js, mimetype="application/javascript")
 
-@app.route("/vapidPublicKey")
-def vapid_key():
-    return jsonify({"publicKey": VAPID_PUBLIC_KEY})
+@app.route("/app")
+@app.route("/")
+def app_page():
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vendi STABILE PUSH VERO</title>
+<style>
+body{{font-family:sans-serif;background:#f1f5f9;margin:0;padding:0 12px}}
+.header{{background:white;border-radius:16px;padding:12px;margin:12px 0;display:flex;align-items:center;justify-content:space-between}}
+.badge{{background:#6366f1;color:white;width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:bold}}
+.tfs button{{border:1px solid #ddd;background:white;padding:8px 14px;border-radius:20px;margin:3px}}
+.tfs button.active{{background:#0f172a;color:white}}
+.card{{background:white;border-radius:16px;padding:14px;margin:10px 0}}
+.globale.FERMO{{color:#f59e0b}} .globale.COMPRA{{color:#22c55e}} .globale.VENDI{{color:#ef4444}}
+.coin{{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="display:flex;align-items:center;gap:10px">
+    <div class="badge">V€</div>
+    <div><b>Vendi STABILE PUSH</b><br><small>BTC • ETH • ORO | PUSH VERO | CLICK APRE APP</small><br><small id="subStatus">Push: verifica...</small></div>
+  </div>
+  <div>
+    <button onclick="testPush()">🔔</button>
+    <button onclick="subscribePush()">📢</button>
+  </div>
+</div>
+<div class="tfs">
+  <button onclick="loadTF('5m')" id="b5m">5m</button>
+  <button onclick="loadTF('15m')" id="b15m">15m</button>
+  <button onclick="loadTF('1H')" id="b1H">1H</button>
+  <button onclick="loadTF('4H')" id="b4H" class="active">4H</button>
+  <button onclick="loadTF('1D')" id="b1D">1D</button>
+</div>
+<div class="card">
+  <div style="display:flex;justify-content:space-between"><div><small>GLOBALE</small><div id="globale" class="globale FERMO" style="font-size:22px;font-weight:bold">FERMO</div><small id="globaleSub">Laterale</small></div><div><small>TF</small><div id="tfLabel" style="font-size:20px;font-weight:bold">4H</div></div></div>
+</div>
+<div class="card" id="coins">Caricamento...</div>
+<div style="text-align:center;color:#888;font-size:12px" id="agg"></div>
+<div style="margin:20px 0;text-align:center">
+  <button onclick="testPush()" style="background:#0f172a;color:white;padding:12px 20px;border-radius:10px;border:none">TEST PUSH SERVER</button>
+  <p style="font-size:11px;color:#666">Se ti arriva a app chiusa, il PUSH VERO funziona. Se arriva solo ad app aperta, è locale.</p>
+</div>
+<script>
+let curTF='4H';
+const VAPID_PUBLIC='{VAPID_PUBLIC_KEY}';
 
-@app.route("/subscribe", methods=["POST"])
-def subscribe():
-    try:
-        data=request.get_json()
-        if not data or 'endpoint' not in data:
-            return jsonify({"error":"no endpoint"}), 400
-        # avoid duplicates
-        exists=False
-        for s in subscriptions:
-            if s.get('endpoint')==data.get('endpoint'):
-                exists=True; break
-        if not exists:
-            subscriptions.append(data)
-            save_subs()
-        print(f"New sub, total {len(subscriptions)}")
-        return jsonify({"ok":True, "total": len(subscriptions)})
-    except Exception as e:
-        return jsonify({"error":str(e)}), 500
+function urlBase64ToUint8Array(base64String) {{
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(c=>c.charCodeAt(0)));
+}}
 
-@app.route("/api/latest")
-def api_latest():
-    return jsonify({"signals": latest_signals, "time": int(time.time()*1000)})
+async function subscribePush() {{
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {{ alert('Push non supportato'); return; }}
+  try {{
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await Notification.requestPermission();
+    if (Notification.permission!=='granted') {{ alert('Permesso notifiche negato'); return; }}
+    const sub = await reg.pushManager.subscribe({{userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC)}});
+    await fetch('/api/push/subscribe', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(sub)}});
+    document.getElementById('subStatus').innerText='Push: ATTIVO [SERVER]';
+    alert('Push SERVER attivato! Ora ricevi anche ad app chiusa.');
+  }} catch(e) {{ alert('Errore push: '+e); console.error(e); }}
+}}
 
-@app.route("/test-push")
-def test_push():
-    # forza un segnale finto per test
-    global latest_signals
-    latest_signals=[{"sym":"BTCEUR","stato":"COMPRA","conf":88,"price":56222.37,"reason":"Test PUSH VERO","rsi":58.5,"time":int(time.time()*1000)}] + latest_signals
-    latest_signals=latest_signals[:10]
-    send_push_to_all()
-    return jsonify({"ok":True, "sent_to": len(subscriptions), "signals": latest_signals})
+async function testPush() {{
+  try {{
+    const r = await fetch('/api/push/test', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{coin:'BTC', tf:curTF}})}});
+    const j = await r.json();
+    alert('Test inviato a '+j.sent_to+' dispositivi. Chiudi l app e aspetta 5 sec.');
+  }} catch(e) {{ alert('Errore test: '+e)}}
+}}
 
-@app.route("/icon-192.png")
-def icon192():
-    return Response(base64.b64decode(ICON_192_B64), mimetype="image/png")
+async function loadTF(tf) {{
+  curTF=tf;
+  document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('b'+tf).classList.add('active');
+  document.getElementById('tfLabel').innerText=tf;
+  document.getElementById('coins').innerHTML='Caricamento...';
+  try {{
+    const controller = new AbortController();
+    const timeout = setTimeout(()=>controller.abort(), 10000);
+    const res = await fetch('/api/signals?tf='+tf, {{signal:controller.signal}});
+    clearTimeout(timeout);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    document.getElementById('globale').innerText=data.globale;
+    document.getElementById('globale').className='globale '+data.globale;
+    document.getElementById('globaleSub').innerText=data.globale==='FERMO'?'Laterale':data.globale;
+    let html='';
+    for (let [name, info] of Object.entries(data.coins)) {{
+      html+=`<div class="coin"><div><b>${{name}}</b> <small>${{info.symbol}} RSI ${{info.rsi}}</small></div><div style="font-weight:bold;color:${{info.signal==='COMPRA'?'#22c55e':info.signal==='VENDI'?'#ef4444':'#f59e0b'}}">${{info.signal}}</div><div>${{info.price.toFixed(2)}}€</div></div>`;
+    }}
+    document.getElementById('coins').innerHTML=html||'Nessun dato';
+    document.getElementById('agg').innerText=`Agg: ${{data.updated}} • TF:${{tf}} • PUSH VERO [SERVER]`;
+  }} catch(e) {{
+    document.getElementById('coins').innerHTML='Errore caricamento: '+e+'<br><small>Render si è svegliato, riprova tra 10 sec</small>';
+  }}
+}}
 
-@app.route("/icon-512.png")
-def icon512():
-    return Response(base64.b64decode(ICON_512_B64), mimetype="image/png")
+(async()=>{
+  if ('serviceWorker' in navigator) {{
+    try {{ await navigator.serviceWorker.register('/sw.js'); }} catch(e) {{}}
+  }}
+  loadTF('4H');
+  setInterval(()=>loadTF(curTF), 60000);
+}})();
+</script>
+</body>
+</html>
+"""
+    return html
 
-@app.route("/icon.png")
-def icon():
-    return icon192()
+# Avvia checker in background
+threading.Thread(target=background_checker, daemon=True).start()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
