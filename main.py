@@ -1,6 +1,6 @@
 """
-Vendi STABILE - PUSH VERO DEFINITIVO - FIXED per Render
-Corretto errore f-string alla riga 425
+Vendi STABILE - PUSH VERO - FIX 2 senza dipendenze obbligatorie
+Questo parte anche se manca flask_cors su Render
 """
 
 import os
@@ -10,7 +10,13 @@ import threading
 import requests
 from datetime import datetime
 from flask import Flask, request, jsonify, Response
-from flask_cors import CORS
+
+# CORS opzionale - se manca non crasha
+try:
+    from flask_cors import CORS
+    HAS_CORS = True
+except ImportError:
+    HAS_CORS = False
 
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U6_Q")
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
@@ -22,7 +28,8 @@ SUBS_FILE = "subscriptions.json"
 LAST_SIGNALS_FILE = "last_signals.json"
 
 app = Flask(__name__)
-CORS(app)
+if HAS_CORS:
+    CORS(app)
 
 def load_json(path, default):
     try:
@@ -124,9 +131,9 @@ def send_push_to_all(title, body, url="/app", coin="BTC", tf="4H", tag="signal")
         print("VAPID_PRIVATE_KEY mancante! Setta env var")
         return 0
     try:
-        from pywebpush import webpush, WebPushException
+        from pywebpush import webpush
     except ImportError:
-        print("pywebpush non installato")
+        print("pywebpush non installato, salto push")
         return 0
     
     success = 0
@@ -152,7 +159,6 @@ def send_push_to_all(title, body, url="/app", coin="BTC", tf="4H", tag="signal")
             success +=1
         except Exception as ex:
             print(f"Push fallita: {ex}")
-            # se 404/410 rimuovi
             try:
                 if hasattr(ex, 'response') and ex.response and ex.response.status_code in [404,410]:
                     to_remove.append(sub)
@@ -219,7 +225,7 @@ def status():
         "subscriptions": len(subscriptions),
         "last_signals": last_signals,
         "vapid_configured": bool(VAPID_PRIVATE_KEY),
-        "telegram_configured": bool(TELEGRAM_TOKEN),
+        "has_cors": HAS_CORS,
         "now": datetime.now().isoformat()
     })
 
@@ -231,7 +237,6 @@ def subscribe():
     if sub not in subscriptions:
         subscriptions.append(sub)
         save_json(SUBS_FILE, subscriptions)
-        print(f"Nuovo abbonato push")
     return jsonify({"ok": True, "count": len(subscriptions)})
 
 @app.route("/api/push/test", methods=["POST"])
@@ -239,21 +244,19 @@ def test_push():
     data = request.get_json(silent=True) or {}
     coin = data.get("coin","BTC")
     tf = data.get("tf","4H")
-    send_push_to_all(f"TEST {coin} COMPRA", f"Questa e' una prova PUSH VERO SERVER - TF {tf} - Se la vedi ad app chiusa, funziona!", coin=coin, tf=tf, tag="test")
+    send_push_to_all(f"TEST {coin} COMPRA", f"Prova PUSH VERO SERVER - TF {tf} - Se la vedi ad app chiusa, funziona!", coin=coin, tf=tf, tag="test")
     return jsonify({"ok": True, "sent_to": len(subscriptions)})
 
 @app.route("/sw.js")
 def sw():
-    # Niente f-string qui, cosi niente errore di graffe
     js_code = """
-const VAPID_PUBLIC = "PLACEHOLDER_VAPID_PUBLIC";
 self.addEventListener('push', function(event) {
     let data = {};
     try { data = event.data.json(); } catch(e) { data = {title: 'Vendi STABILE', body: event.data.text()} }
     const title = data.title || 'Vendi STABILE [SERVER]';
     const options = {
         body: data.body || 'Nuovo segnale',
-        icon: data.icon || 'https://cdn-icons-png.flaticon.com/512/138/138292.png',
+        icon: 'https://cdn-icons-png.flaticon.com/512/138/138292.png',
         badge: 'https://cdn-icons-png.flaticon.com/512/138/138292.png',
         tag: data.tag || 'signal',
         data: { url: data.url || '/app' },
@@ -282,7 +285,6 @@ self.addEventListener('notificationclick', function(event) {
     );
 });
 """
-    js_code = js_code.replace("PLACEHOLDER_VAPID_PUBLIC", VAPID_PUBLIC_KEY)
     return Response(js_code, mimetype="application/javascript")
 
 @app.route("/app")
@@ -331,11 +333,11 @@ body{font-family:sans-serif;background:#f1f5f9;margin:0;padding:0 12px}
 <div style="text-align:center;color:#888;font-size:12px" id="agg"></div>
 <div style="margin:20px 0;text-align:center">
   <button onclick="testPush()" style="background:#0f172a;color:white;padding:12px 20px;border-radius:10px;border:none">TEST PUSH SERVER</button>
-  <p style="font-size:11px;color:#666">Se ti arriva a app chiusa, il PUSH VERO funziona. Se arriva solo ad app aperta, e' locale.</p>
+  <p style="font-size:11px;color:#666">Se ti arriva a app chiusa, il PUSH VERO funziona.</p>
 </div>
 <script>
 let curTF='4H';
-const VAPID_PUBLIC='VAPID_PUBLIC_PLACEHOLDER';
+const VAPID_PUBLIC='BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U6_Q';
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -353,7 +355,7 @@ async function subscribePush() {
     const sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC)});
     await fetch('/api/push/subscribe', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(sub)});
     document.getElementById('subStatus').innerText='Push: ATTIVO [SERVER]';
-    alert('Push SERVER attivato! Ora ricevi anche ad app chiusa.');
+    alert('Push SERVER attivato!');
   } catch(e) { alert('Errore push: '+e); console.error(e); }
 }
 
@@ -384,7 +386,7 @@ async function loadTF(tf) {
     let html='';
     for (let [name, info] of Object.entries(data.coins)) {
       let color = info.signal==='COMPRA'?'#22c55e':info.signal==='VENDI'?'#ef4444':'#f59e0b';
-      html+= '<div class="coin"><div><b>'+name+'</b> <small>'+info.symbol+' RSI '+info.rsi+'</small></div><div style="font-weight:bold;color:'+color+'">'+info.signal+'</div><div>'+info.price.toFixed(2)+'€</div></div>';
+      html+= '<div class="coin"><div><b>'+name+'</b> <small>'+info.symbol+' RSI '+info.rsi+'</small></div><div style="font-weight:bold;color:'+color+'">'+info.signal+'</div><div>'+info.price.toFixed(2)+'E</div></div>';
     }
     document.getElementById('coins').innerHTML=html||'Nessun dato';
     document.getElementById('agg').innerText='Agg: '+data.updated+' - TF:'+tf+' - PUSH VERO [SERVER]';
@@ -404,8 +406,7 @@ async function loadTF(tf) {
 </body>
 </html>
 """
-    html_final = html_template.replace("VAPID_PUBLIC_PLACEHOLDER", VAPID_PUBLIC_KEY)
-    return html_final
+    return html_template
 
 threading.Thread(target=background_checker, daemon=True).start()
 
