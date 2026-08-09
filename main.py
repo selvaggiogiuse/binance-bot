@@ -121,7 +121,7 @@ def kraken_fast_price():
     except: return {}
 
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V7.1 FIX TAP REAL TF","time":datetime.now().isoformat(),"cache":len(OHLC_CACHE)})
+def ping(): return jsonify({"ok":True,"msg":"V7.2 FIX STORICO >60% SOLO COMPRA/VENDI","time":datetime.now().isoformat(),"cache":len(OHLC_CACHE)})
 @app.route("/api/signals")
 def signals():
     tf = request.args.get("tf","4H"); live_prices = kraken_fast_price(); coins_data = {}
@@ -143,26 +143,48 @@ def signals():
     return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": datetime.now().strftime("%H:%M:%S"),"source": f"Kraken REAL TF {tf} BTC ${btc_price:.0f} - RSI vero"})
 @app.route("/api/history")
 def history():
-    tf_q = request.args.get("tf","4H"); live = kraken_fast_price(); hist=[]
-    for coin in ["BTC","ETH","ORO"]:
-        ohlc = get_ohlc(coin, tf_q)
-        if ohlc:
+    # FIX: mostra SOLO COMPRA/VENDI con conf >=60% - TUTTI i TF
+    live = kraken_fast_price()
+    all_signals = []
+    # controlla cache esistente + prova a caricare tutti i TF
+    tfs_to_check = ["5m","15m","1H","4H","1D"]
+    for tf in tfs_to_check:
+        for coin in ["BTC","ETH","ORO"]:
+            ohlc = get_ohlc(coin, tf)
+            if not ohlc: continue
             comp = compute_from_ohlc(ohlc, live.get(coin))
-            if comp["conf"]>=55: hist.append({"coin": coin,"tf": tf_q,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],"time": f"Ora {datetime.now().strftime('%H:%M')} TF {tf_q}","adx": comp["adx"],"reasons": comp["reasons"]})
-    if not hist: hist = [{"coin":"BTC","tf":tf_q,"signal":"FERMO","conf":62,"rsi":58,"price":live.get("BTC",64800),"time":f"Ora TF {tf_q}","adx":22,"reasons":["Kraken REAL"]},]
-    return jsonify(hist)
+            # FILTRO VERO: solo COMPRA/VENDI e >=60%
+            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= 60:
+                all_signals.append({
+                    "coin": coin,
+                    "tf": tf,
+                    "signal": comp["signal"],
+                    "conf": comp["conf"],
+                    "rsi": comp["rsi"],
+                    "price": comp["price"],
+                    "time": f"{tf} • {datetime.now().strftime('%H:%M')}",
+                    "adx": comp["adx"],
+                    "reasons": comp["reasons"]
+                })
+    # ordina per conf più alta
+    all_signals.sort(key=lambda x: x["conf"], reverse=True)
+    # se vuoto (mercato piatto), ritorna messaggio vuoto - non FERMO 55%
+    if not all_signals:
+        return jsonify([])
+    return jsonify(all_signals[:15])
+
 @app.route("/api/push/subscribe", methods=["POST"])
 def sub(): return jsonify({"ok":True,"total":1})
 @app.route("/api/push/test", methods=["POST"])
 def testp(): return jsonify({"ok":True,"sent_to":1,"subs":1})
 @app.route("/sw.js")
-def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.1 FIX')})", mimetype="application/javascript")
+def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.2 FIX')})", mimetype="application/javascript")
 @app.route("/")
 @app.route("/app")
 def app_page():
     return """
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi PRO V7.1 FIX TAP</title>
+<title>Vendi PRO V7.2 STORICO FIX</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
@@ -187,9 +209,10 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
 .reason{display:inline-block;background:#f1f5f9;padding:3px 6px;border-radius:6px;font-size:9px;margin:2px}
 .hist-item{display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #f1f5f9;font-size:12px}
+.empty-hist{padding:16px;text-align:center;color:#64748b;font-size:12px}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✓</div><div><b>Vendi PRO V7.1 FIX TAP</b><br><small>FIX TAP dettagli + RSI vero TF</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✓</div><div><b>Vendi PRO V7.2 STORICO FIX</b><br><small>FIX storico >60% solo COMPRA/VENDI</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
 <div class="tfs">
 <button onclick="loadTF('5m')" id=b5m>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
@@ -199,7 +222,7 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 </div>
 <div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#10b981;font-size:10px"></small></div></div></div>
 <div class="coin-card" id=coins>Caricamento REAL TF...</div>
-<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >60% TF <span id=histTF>4H</span></b><br><small style="color:#64748b">TAP per aprire - RSI vero</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
+<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >60% TUTTI TF</b><br><small style="color:#64748b">Solo COMPRA/VENDI >60% - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
 <div class="fab"><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-dark" onclick="subscribePush()">📢 Push ALL</button></div>
 <div id=modal><div class="modal-box">
 <div style="display:flex;justify-content:space-between"><b id=mCoin>BTC</b><span onclick="closeModal()" style="cursor:pointer">✕</span></div>
@@ -230,7 +253,7 @@ async function testPush(){try{const r=await fetch('/api/push/test',{method:'POST
 function colorFor(s){return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}
 function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}
 async function loadTF(tf){
-  curTF=tf; document.getElementById('histTF').innerText=tf;
+  curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
   document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico RSI vero '+tf+' da Kraken...</div>';
   try{
@@ -246,7 +269,16 @@ async function loadTF(tf){
     loadHistGlobal();
   }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore REAL TF: '+e.message+'</div>';}
 }
-async function loadHistGlobal(){try{const r=await fetch('/api/history?tf='+curTF); const list=await r.json(); const c=document.getElementById('histList'); c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');}catch{}}
+async function loadHistGlobal(){
+  try{
+    const r=await fetch('/api/history'); const list=await r.json(); const c=document.getElementById('histList');
+    if(list.length===0){
+      c.innerHTML='<div class=empty-hist>😴 Nessun segnale >60% al momento<br><small>Mercato in FERMO su tutti i TF - appena c\\'è un COMPRA/VENDI forte appare qui</small></div>';
+    } else {
+      c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');
+    }
+  }catch(e){document.getElementById('histList').innerHTML='<div class=empty-hist>Errore storico</div>';}
+}
 function toggleHist(){const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'||l.style.display==''){l.style.display='block';a.innerText='▲';loadHistGlobal();}else{l.style.display='none';a.innerText='▼';}}
 function openDetails(coin){
   try{
