@@ -1,12 +1,10 @@
 """
-Vendi STABILE PRO - PREZZO USDT PURO (no conversione EUR)
-- Prezzo = BTCUSDT / ETHUSDT / PAXGUSDT ticker live Binance
-- Uguale a TradingView / Binance spot
+Vendi STABILE PRO - V2 PRO PUSH 5M/15M ATTIVE >60%
+- Push per 5m,15m,1H,4H,1D se conf>=60%
 """
-import os, json, time, threading, requests
+import os, json, time, threading, requests, math
 from datetime import datetime
 from flask import Flask, request, jsonify, Response
-
 try:
     from flask_cors import CORS
     HAS_CORS=True
@@ -19,7 +17,6 @@ VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:test@test.com")
 SUBS_FILE="subscriptions.json"
 LAST_FILE="last_signals.json"
 HISTORY_FILE="signals_history.json"
-
 app=Flask(__name__)
 if HAS_CORS: CORS(app)
 
@@ -42,43 +39,185 @@ SYMBOLS = {"BTC": "BTCUSDT","ETH": "ETHUSDT","ORO": "PAXGUSDT"}
 TF_MAP={"5m":"5m","15m":"15m","1H":"1h","4H":"4h","1D":"1d"}
 BINANCE_BASES=["https://data-api.binance.vision","https://api1.binance.com","https://api2.binance.com"]
 
-def get_klines(symbol, interval, limit=100):
+def get_ohlcv(symbol, interval, limit=200):
     headers={"User-Agent":"Mozilla/5.0"}
     for base in BINANCE_BASES:
         try:
             url=f"{base}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-            r=requests.get(url, timeout=10, headers=headers)
+            r=requests.get(url, timeout=12, headers=headers)
             if r.status_code in (451,403,400): continue
             r.raise_for_status()
-            return [float(c[4]) for c in r.json()]
+            data=r.json()
+            ohlcv=[]
+            for c in data:
+                ohlcv.append({"open":float(c[1]),"high":float(c[2]),"low":float(c[3]),"close":float(c[4]),"volume":float(c[5])})
+            return ohlcv
         except: continue
     return None
 
 def get_ticker_price(symbol):
-    headers={"User-Agent":"Mozilla/5.0"}
     for base in BINANCE_BASES:
         try:
-            url=f"{base}/api/v3/ticker/price?symbol={symbol}"
-            r=requests.get(url, timeout=8, headers=headers)
+            r=requests.get(f"{base}/api/v3/ticker/price?symbol={symbol}", timeout=8)
             if r.status_code in (451,403,400): continue
-            r.raise_for_status()
             return float(r.json()["price"])
         except: continue
     return None
 
+def sma(arr, period):
+    if len(arr)<period: return None
+    return sum(arr[-period:])/period
+
+def ema(arr, period):
+    if len(arr)<period: return None
+    k=2/(period+1)
+    e=sma(arr[:period], period)
+    for price in arr[period:]:
+        e = price*k + e*(1-k)
+    return e
+
+def ema_series(arr, period):
+    if len(arr)<period: return [None]*len(arr)
+    k=2/(period+1)
+    s=sma(arr[:period], period)
+    vals=[None]*(period-1)+[s]
+    e=s
+    for price in arr[period:]:
+        e = price*k + e*(1-k)
+        vals.append(e)
+    return vals
+
 def calc_rsi(prices, period=14):
-    if not prices or len(prices)<period+1: return 50
-    gains=sum(max(0, prices[-i]-prices[-i-1]) for i in range(1, period+1))
-    losses=sum(max(0, prices[-i-1]-prices[-i]) for i in range(1, period+1))
+    if len(prices)<period+1: return 50
+    gains=0; losses=0
+    for i in range(1, period+1):
+        diff=prices[-i]-prices[-i-1]
+        if diff>0: gains+=diff
+        else: losses-=diff
     if losses==0: return 95 if gains>0 else 50
     return round(100-(100/(1+gains/losses)),2)
 
-def get_signal(rsi): return "COMPRA" if rsi<=30 else "VENDI" if rsi>=70 else "FERMO"
-def get_conf(rsi): return min(95, max(52, int(50 + abs(rsi-50)*1.8)))
-def get_trend(rsi): return "Rialzista" if rsi>=60 else "Ribassista" if rsi<=40 else "Laterale"
+def calc_bollinger(prices, period=20, mult=2):
+    if len(prices)<period: return None,None,None
+    m=sma(prices, period)
+    std=math.sqrt(sum((x-m)**2 for x in prices[-period:])/period)
+    return m+mult*std, m, m-mult*std
+
+def calc_macd(prices):
+    if len(prices)<35: return 0,0,0
+    ema12=ema(prices,12); ema26=ema(prices,26)
+    if ema12 is None or ema26 is None: return 0,0,0
+    macd_line=ema12-ema26
+    ema12_s=ema_series(prices,12); ema26_s=ema_series(prices,26)
+    macd_series=[a-b if a is not None and b is not None else None for a,b in zip(ema12_s, ema26_s)]
+    filtered=[x for x in macd_series if x is not None]
+    if len(filtered)<9: return macd_line,0,0
+    signal=ema(filtered,9) or 0
+    return macd_line, signal, macd_line-signal
+
+def calc_atr(highs, lows, closes, period=14):
+    if len(closes)<period+1: return closes[-1]*0.01 if closes else 0
+    trs=[]
+    for i in range(1,len(closes)):
+        hl=highs[i]-lows[i]; hc=abs(highs[i]-closes[i-1]); lc=abs(lows[i]-closes[i-1])
+        trs.append(max(hl,hc,lc))
+    return sma(trs, period) or trs[-1]
+
+def calc_adx(highs, lows, closes, period=14):
+    if len(closes)<period*2: return 15,0,0
+    trs=[]; plus_dm=[]; minus_dm=[]
+    for i in range(1,len(closes)):
+        hl=highs[i]-lows[i]; hc=abs(highs[i]-closes[i-1]); lc=abs(lows[i]-closes[i-1])
+        trs.append(max(hl,hc,lc))
+        up=highs[i]-highs[i-1]; down=lows[i-1]-lows[i]
+        plus_dm.append(up if up>0 and up>down else 0)
+        minus_dm.append(down if down>0 and down>up else 0)
+    def wilder(arr,p):
+        if len(arr)<p: return None
+        s=sum(arr[:p])
+        for v in arr[p:]: s = s - s/p + v
+        return s
+    sm_tr=wilder(trs,period); sm_plus=wilder(plus_dm,period); sm_minus=wilder(minus_dm,period)
+    if not sm_tr or sm_tr==0: return 15,0,0
+    plus_di=100*sm_plus/sm_tr; minus_di=100*sm_minus/sm_tr
+    dx=100*abs(plus_di-minus_di)/(plus_di+minus_di) if (plus_di+minus_di)!=0 else 0
+    return max(5,min(60,dx)), plus_di, minus_di
+
+def evaluate_signals(ohlcv, current_price, higher_tf_ohlcv=None, tf="4H"):
+    closes=[c["close"] for c in ohlcv]; highs=[c["high"] for c in ohlcv]; lows=[c["low"] for c in ohlcv]; vols=[c["volume"] for c in ohlcv]
+    rsi=calc_rsi(closes,14); ema50=ema(closes,50) or closes[-1]; ema200=ema(closes,200) or closes[-1]
+    bb_up, bb_mid, bb_low=calc_bollinger(closes,20,2)
+    macd_line, macd_signal, _=calc_macd(closes)
+    vol_sma=sma(vols,20) or vols[-1]; atr=calc_atr(highs,lows,closes,14)
+    adx, plus_di, minus_di=calc_adx(highs,lows,closes,14)
+    bullish=0; bearish=0; reasons=[]
+    if rsi<=20: bullish+=40; reasons.append(f"RSI ipervenduto {rsi}")
+    elif rsi<=25: bullish+=30; reasons.append(f"RSI molto basso {rsi}")
+    elif rsi<=30: bullish+=20; reasons.append(f"RSI basso {rsi}")
+    elif rsi>=80: bearish+=40; reasons.append(f"RSI ipercomprato {rsi}")
+    elif rsi>=75: bearish+=30; reasons.append(f"RSI molto alto {rsi}")
+    elif rsi>=70: bearish+=20; reasons.append(f"RSI alto {rsi}")
+    if current_price>ema200 and ema50>ema200: bullish+=25; reasons.append("Trend rialzista EMA50>EMA200")
+    elif current_price<ema200 and ema50<ema200: bearish+=25; reasons.append("Trend ribassista EMA50<EMA200")
+    elif current_price>ema200: bullish+=10
+    elif current_price<ema200: bearish+=10
+    if bb_low and current_price<=bb_low: bullish+=15; reasons.append("Tocco banda inf Bollinger")
+    elif bb_up and current_price>=bb_up: bearish+=15; reasons.append("Tocco banda sup Bollinger")
+    if macd_line>macd_signal: bullish+=10; reasons.append("MACD rialzista")
+    else: bearish+=10; reasons.append("MACD ribassista")
+    vol_ratio=vols[-1]/vol_sma if vol_sma else 1
+    if vol_ratio>1.3:
+        if bullish>bearish: bullish+=10; reasons.append(f"Vol +{int((vol_ratio-1)*100)}% long")
+        else: bearish+=10; reasons.append(f"Vol +{int((vol_ratio-1)*100)}% short")
+    adx_boost=1.0
+    if adx<15: adx_boost=0.7; reasons.append(f"Laterale ADX {adx:.0f}")
+    elif adx>25: adx_boost=1.2; reasons.append(f"Trend forte ADX {adx:.0f}")
+    bullish*=adx_boost; bearish*=adx_boost
+    mtf_msg=""
+    if higher_tf_ohlcv:
+        h_closes=[c["close"] for c in higher_tf_ohlcv]
+        h_ema50=ema(h_closes,50) or h_closes[-1]; h_ema200=ema(h_closes,200) or h_closes[-1]
+        h_trend="bull" if h_closes[-1]>h_ema200 and h_ema50>h_ema200 else "bear" if h_closes[-1]<h_ema200 and h_ema50<h_ema200 else "neutral"
+        if tf in ("5m","15m"):
+            if bullish>bearish and h_trend=="bear": bullish*=0.7; mtf_msg="⚠️ 1H controtrend"
+            if bearish>bullish and h_trend=="bull": bearish*=0.7; mtf_msg="⚠️ 1H controtrend"
+            if bullish>bearish and h_trend=="bull": bullish*=1.15; mtf_msg="✅ 1H conferma"
+            if bearish>bullish and h_trend=="bear": bearish*=1.15; mtf_msg="✅ 1H conferma"
+        else:
+            if bullish>bearish and h_trend=="bear": bullish*=0.8; mtf_msg="⚠️ 4H controtrend"
+            if bearish>bullish and h_trend=="bull": bearish*=0.8; mtf_msg="⚠️ 4H controtrend"
+    if mtf_msg: reasons.append(mtf_msg)
+    bullish=min(95,int(bullish)); bearish=min(95,int(bearish))
+    if bullish>bearish and bullish>=35: signal="COMPRA"; conf=bullish; trend="Rialzista"
+    elif bearish>bullish and bearish>=35: signal="VENDI"; conf=bearish; trend="Ribassista"
+    else: signal="FERMO"; conf=max(bullish,bearish, int(50+abs(rsi-50))); trend="Laterale" if adx<20 else ("Rialzista" if bullish>bearish else "Ribassista")
+    sl=tp=0
+    if signal=="COMPRA": sl=current_price-atr*1.5; tp=current_price+atr*3
+    elif signal=="VENDI": sl=current_price+atr*1.5; tp=current_price-atr*3
+    return {"rsi":rsi,"ema50":ema50,"ema200":ema200,"bb_up":bb_up,"bb_low":bb_low,"macd":macd_line,"macd_signal":macd_signal,"vol_ratio":vol_ratio,"adx":adx,"atr":atr,"bullish":bullish,"bearish":bearish,"signal":signal,"conf":conf,"trend":trend,"reasons":reasons,"sl":sl,"tp":tp}
+
+def get_all_signals(tf="4H"):
+    interval=TF_MAP.get(tf,"4h")
+    higher_interval=None
+    if tf=="5m": higher_interval="1h"
+    elif tf=="15m": higher_interval="1h"
+    elif tf=="1H": higher_interval="4h"
+    elif tf=="4H": higher_interval="1d"
+    results={}; globale="FERMO"; max_conf=0
+    for name, sym in SYMBOLS.items():
+        ohlcv=get_ohlcv(sym, interval, 200)
+        if not ohlcv:
+            results[name]={"symbol":sym,"rsi":0,"signal":"OFFLINE","price":0,"conf":0,"trend":"-","reasons":[]}
+            continue
+        live_price=get_ticker_price(sym) or ohlcv[-1]["close"]
+        higher_ohlcv=get_ohlcv(sym, higher_interval, 200) if higher_interval else None
+        ev=evaluate_signals(ohlcv, live_price, higher_ohlcv, tf)
+        results[name]={"symbol":sym,"price":live_price,"rsi":ev["rsi"],"signal":ev["signal"],"conf":ev["conf"],"trend":ev["trend"],"tf":tf,"ema50":ev["ema50"],"ema200":ev["ema200"],"bb_up":ev["bb_up"],"bb_low":ev["bb_low"],"macd":ev["macd"],"macd_signal":ev["macd_signal"],"vol_ratio":ev["vol_ratio"],"adx":ev["adx"],"atr":ev["atr"],"sl":ev["sl"],"tp":ev["tp"],"reasons":ev["reasons"],"bullish":ev["bullish"],"bearish":ev["bearish"]}
+        if ev["signal"] in ("COMPRA","VENDI") and ev["conf"]>max_conf:
+            max_conf=ev["conf"]; globale=ev["signal"]
+    return {"coins":results,"globale":globale,"tf":tf,"updated":datetime.now().strftime("%H:%M:%S")}
 
 def add_history(coin, tf, info):
-    if tf not in ("1H","4H"): return
     if info["conf"]<60: return
     if info["signal"] not in ("COMPRA","VENDI"): return
     now=datetime.now()
@@ -86,36 +225,13 @@ def add_history(coin, tf, info):
         try:
             last=history[-1]
             lt=datetime.fromisoformat(last["timestamp"])
-            if last["coin"]==coin and last["tf"]==tf and last["signal"]==info["signal"] and (now-lt).total_seconds()<3600:
+            if last["coin"]==coin and last["tf"]==tf and last["signal"]==info["signal"] and (now-lt).total_seconds()<900:
                 return
         except: pass
-    entry={"timestamp":now.isoformat(),"time":now.strftime("%d/%m %H:%M"),"coin":coin,"tf":tf,"signal":info["signal"],"conf":info["conf"],"rsi":info["rsi"],"price":info["price"],"trend":info["trend"]}
+    entry={"timestamp":now.isoformat(),"time":now.strftime("%d/%m %H:%M"),"coin":coin,"tf":tf,"signal":info["signal"],"conf":info["conf"],"rsi":info["rsi"],"price":info["price"],"trend":info["trend"],"adx":info.get("adx",0),"reasons":info.get("reasons",[])[:3]}
     history.append(entry)
-    if len(history)>200: del history[0:len(history)-200]
+    if len(history)>400: del history[0:len(history)-400]
     save_json(HISTORY_FILE, history)
-
-def get_all_signals(tf="4H"):
-    interval=TF_MAP.get(tf,"4h")
-    # Prezzi live USDT puri
-    live_prices={}
-    for name, sym in SYMBOLS.items():
-        p=get_ticker_price(sym)
-        if p: live_prices[name]=p
-
-    results={}
-    globale="FERMO"
-    for name, sym in SYMBOLS.items():
-        closes=get_klines(sym, interval)
-        if not closes:
-            results[name]={"symbol":sym,"rsi":0,"signal":"OFFLINE","price":live_prices.get(name,0),"conf":0,"trend":"-"}
-            continue
-        rsi=calc_rsi(closes)
-        signal=get_signal(rsi)
-        # Prezzo USDT live - se non disponibile fallback a close
-        price_usdt = live_prices.get(name, closes[-1] if closes else 0)
-        results[name]={"symbol":sym,"rsi":rsi,"signal":signal,"price":price_usdt,"conf":get_conf(rsi),"trend":get_trend(rsi),"tf":tf}
-        if signal in ("COMPRA","VENDI"): globale=signal
-    return {"coins":results,"globale":globale,"tf":tf,"updated":datetime.now().strftime("%H:%M:%S")}
 
 def send_push(title, body, coin="BTC", tf="4H"):
     if not subscriptions or not VAPID_PRIVATE_KEY: return 0
@@ -132,21 +248,24 @@ def send_push(title, body, coin="BTC", tf="4H"):
     return ok
 
 def checker():
-    print("Checker USDT PURO avviato")
+    print("Checker V2 PUSH TUTTI TF >60% avviato")
     while True:
         try:
-            for tf in ["1H","4H"]:
+            # Controlla TUTTI i TF per push >60%
+            for tf in ["5m","15m","1H","4H","1D"]:
                 data=get_all_signals(tf)
                 for cname, info in data["coins"].items():
                     key=f"{cname}_{tf}"
                     is_new = info["signal"]!=last_signals.get(key,"FERMO")
                     add_history(cname, tf, info)
-                    if info["signal"] in ("COMPRA","VENDI") and is_new and info["conf"]>=60:
-                        send_push(f"{cname}: {info['signal']} {info['conf']}%", f"${info['price']:.2f} - {info['trend']} RSI {info['rsi']} TF {tf}", coin=cname, tf=tf)
+                    # PUSH PER TUTTI I TF SE >60%
+                    if info["signal"] in ("COMPRA","VENDI") and info["conf"]>=60:
+                        if is_new or tf in ("5m","15m"): # su scalping manda anche se stesso segnale ma dopo 15 min
+                            send_push(f"{cname} {tf}: {info['signal']} {info['conf']}%", f"${info['price']:.2f} RSI {info['rsi']} ADX {info['adx']:.0f} | {', '.join(info['reasons'][:2])}", coin=cname, tf=tf)
                     last_signals[key]=info["signal"]
                 save_json(LAST_FILE, last_signals)
                 time.sleep(2)
-            time.sleep(60)
+            time.sleep(20) # check ogni 20 sec per scalping
         except Exception as e:
             print(e); time.sleep(20)
 
@@ -158,11 +277,10 @@ def sig(): return jsonify(get_all_signals(request.args.get("tf","4H")))
 
 @app.route("/api/history")
 def hist_api():
-    coin=request.args.get("coin")
-    min_conf=int(request.args.get("min_conf","60"))
-    filtered=[h for h in history if h["conf"]>=min_conf and h["tf"] in ("1H","4H")]
+    coin=request.args.get("coin"); min_conf=int(request.args.get("min_conf","60"))
+    filtered=[h for h in history if h["conf"]>=min_conf]
     if coin: filtered=[h for h in filtered if h["coin"]==coin]
-    filtered=sorted(filtered, key=lambda x: x["timestamp"], reverse=True)[:100]
+    filtered=sorted(filtered, key=lambda x: x["timestamp"], reverse=True)[:150]
     return jsonify(filtered)
 
 @app.route("/api/push/subscribe", methods=["POST"])
@@ -175,7 +293,7 @@ def sub():
 @app.route("/api/push/test", methods=["POST"])
 def testp():
     d=request.get_json(silent=True) or {}
-    sent=send_push(f"TEST {d.get('coin','BTC')} COMPRA 75%", f"Test USDT - {datetime.now().strftime('%H:%M:%S')}", coin=d.get('coin','BTC'), tf=d.get('tf','4H'))
+    sent=send_push(f"TEST V2 {d.get('coin','BTC')} {d.get('tf','5m')} >60%", f"Test push tutti TF - {datetime.now().strftime('%H:%M:%S')}", coin=d.get('coin','BTC'), tf=d.get('tf','5m'))
     return jsonify({"ok":True,"sent_to":sent,"subs":len(subscriptions)})
 
 @app.route("/sw.js")
@@ -186,125 +304,115 @@ def sw(): return Response("self.addEventListener('push',e=>{let d={};try{d=e.dat
 def app_page():
     return """
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi STABILE PRO</title>
+<title>Vendi PRO V2 PUSH ALL</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
-body{background:#f8fafc;min-height:100vh;padding:12px 12px 100px}
-.header{background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);border-radius:20px;padding:18px;color:white;display:flex;justify-content:space-between;align-items:center}
-.logo{width:48px;height:48px;background:rgba(255,255,255,.2);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px}
-.tfs{display:flex;gap:8px;margin:16px 0;overflow-x:auto}
-.tfs button{border:none;background:white;padding:10px 18px;border-radius:999px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
+.header{background:linear-gradient(135deg,#0f172a 0%,#6366f1 100%);border-radius:20px;padding:16px;color:white;display:flex;justify-content:space-between;align-items:center}
+.logo{width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800}
+.tfs{display:flex;gap:5px;margin:12px 0;overflow-x:auto}
+.tfs button{border:none;background:white;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
 .tfs button.active{background:#0f172a;color:white}
-.global-card{background:white;border-radius:20px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,.05)}
-.coin-card{background:white;border-radius:20px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:14px}
-.coin-row{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid #f8fafc;cursor:pointer}
-.coin-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white}
+.tfs button.scalp{border:1px solid #f59e0b}
+.global-card{background:white;border-radius:16px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,.05)}
+.coin-card{background:white;border-radius:18px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:10px}
+.coin-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f8fafc;cursor:pointer}
+.coin-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:13px}
 .btc{background:linear-gradient(135deg,#f59e0b,#f97316)}.eth{background:linear-gradient(135deg,#6366f1,#8b5cf6)}.oro{background:linear-gradient(135deg,#eab308,#ca8a04)}
-.badge{padding:6px 12px;border-radius:999px;font-weight:700;font-size:12px}
-.FERMO-bg{background:#fef3c7;color:#d97706}.COMPRA-bg{background:#dcfce7;color:#16a34a}.VENDI-bg{background:#fee2e2;color:#dc2626}
-.fab{position:fixed;bottom:20px;left:12px;right:12px;display:flex;gap:8px;z-index:20}
-.fab button{flex:1;padding:12px;border-radius:16px;border:none;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:13px}
+.badge{padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}
+.FERMO-bg{background:#fef3c7;color:#92400e}.COMPRA-bg{background:#dcfce7;color:#166534}.VENDI-bg{background:#fee2e2;color:#991b1b}
+.fab{position:fixed;bottom:16px;left:12px;right:12px;display:flex;gap:8px;z-index:20}
+.fab button{flex:1;padding:11px;border-radius:14px;border:none;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:12px}
 .btn-dark{background:#0f172a;color:white}.btn-light{background:white;color:#0f172a;border:1px solid #e2e8f0!important}
-#modal{position:fixed;inset:0;background:rgba(15,23,42,.6);backdrop-filter:blur(8px);display:none;align-items:end;justify-content:center;z-index:50;padding:12px}
+#modal{position:fixed;inset:0;background:rgba(15,23,42,.7);backdrop-filter:blur(10px);display:none;align-items:end;justify-content:center;z-index:50;padding:10px}
 #modal.show{display:flex}
-.modal-box{background:white;width:100%;max-width:480px;border-radius:28px;padding:22px;max-height:85vh;overflow:auto}
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
-.detail-item{background:#f8fafc;border-radius:14px;padding:12px}
-.hist-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:12px;background:#f8fafc;margin:6px 0;font-size:13px}
+.modal-box{background:white;width:100%;max-width:520px;border-radius:20px;padding:16px;max-height:90vh;overflow:auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+.item{background:#f8fafc;border-radius:10px;padding:8px;font-size:11px}
+.item b{display:block;font-size:12px}
+.reason{font-size:10px;background:#eef2ff;color:#4338ca;padding:3px 7px;border-radius:999px;display:inline-block;margin:2px}
+.hist-item{display:flex;justify-content:space-between;align-items:center;padding:7px 9px;border-radius:8px;background:#f8fafc;margin:4px 0;font-size:11px}
 </style>
 </head><body>
-<div class=header><div style="display:flex;gap:12px;align-items:center"><div class=logo>V$</div><div><div style="font-weight:800">Vendi STABILE PRO</div><div style="opacity:.8;font-size:12px">BTCUSDT • ETHUSDT • PAXGUSDT • LIVE</div><div style="opacity:.7;font-size:11px" id=subStatus>Push: verifica...</div></div></div>🔔</div>
-<div class=tfs><button onclick="loadTF('5m')" id=b5m>5m</button><button onclick="loadTF('15m')" id=b15m>15m</button><button onclick="loadTF('1H')" id=b1H>1H</button><button onclick="loadTF('4H')" id=b4H class=active>4H</button><button onclick="loadTF('1D')" id=b1D>1D</button></div>
-<div class=global-card><div><div style="font-size:11px;color:#64748b">GLOBALE</div><div style="font-weight:800;font-size:18px" id=globale>...</div><div style="font-size:12px;color:#64748b" id=globaleSub>TF 4H</div></div><div style="text-align:right"><div style="font-size:11px;color:#64748b">AGGIORNATO</div><div style="font-weight:700" id=agg>--</div><div style="font-size:11px;color:#94a3b8">USDT LIVE</div></div></div>
-<div class=coin-card id=coins><div style="padding:30px;text-align:center;color:#94a3b8">Caricamento...</div></div>
-<div class=coin-card style="margin-top:16px"><div style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico segnali affidabili</b><div style="font-size:12px;color:#64748b">Solo 1H e 4H con >60%</div></div><div id=histArrow>▼</div></div><div id=histList style="display:none;padding:0 12px 12px"></div></div>
-<div class=fab><button class=btn-light onclick="testPush()">🔔 Test</button><button class=btn-dark onclick="subscribePush()">📢 Attiva Push</button></div>
+<div class=header><div style="display:flex;gap:10px;align-items:center"><div class=logo>V2</div><div><div style="font-weight:800;font-size:14px">Vendi PRO V2 • PUSH TUTTI TF</div><div style="opacity:.8;font-size:10px">5m 15m 1H 4H 1D >60% • RSI+EMA+BB+MACD+VOL+ADX</div><div style="opacity:.6;font-size:9px" id=subStatus>Push: verifica...</div></div></div>🔔</div>
+<div class=tfs>
+<button onclick="loadTF('5m')" id=b5m class=scalp>5m ⚡</button>
+<button onclick="loadTF('15m')" id=b15m class=scalp>15m ⚡</button>
+<button onclick="loadTF('1H')" id=b1H>1H</button>
+<button onclick="loadTF('4H')" id=b4H class=active>4H</button>
+<button onclick="loadTF('1D')" id=b1D>1D</button>
+</div>
+<div class=global-card><div><div style="font-size:9px;color:#64748b">GLOBALE</div><div style="font-weight:800;font-size:14px" id=globale>...</div><div style="font-size:10px;color:#64748b" id=globaleSub>TF 4H</div></div><div style="text-align:right"><div style="font-size:9px;color:#64748b">AGGIORNATO</div><div style="font-weight:700;font-size:12px" id=agg>--</div><div style="font-size:9px;color:#94a3b8">PUSH ALL TF >60%</div></div></div>
+<div class=coin-card id=coins><div style="padding:24px;text-align:center;color:#94a3b8">Caricamento...</div></div>
+<div class=coin-card style="margin-top:12px"><div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b style="font-size:13px">📜 Storico V2 PRO >60% TUTTI TF</b><div style="font-size:10px;color:#64748b">5m 15m 1H 4H 1D con motivazioni</div></div><div id=histArrow>▼</div></div><div id=histList style="display:none;padding:0 8px 8px"></div></div>
+<div class=fab><button class=btn-light onclick="testPush()">🔔 Test 5m</button><button class=btn-dark onclick="subscribePush()">📢 Attiva Push ALL</button></div>
 <div id=modal onclick="if(event.target==this)closeModal()"><div class=modal-box>
-  <div style="display:flex;justify-content:space-between"><div><b id=mCoin>BTC</b><div id=mPrice style="color:#64748b;font-size:13px"></div></div><button onclick="closeModal()" style="width:32px;height:32px;border-radius:999px;border:none;background:#f1f5f9">✕</button></div>
-  <div class=detail-grid><div class=detail-item><small>SEGNALE</small><b id=mSignal>-</b><div id=mConf style="font-size:12px;color:#64748b"></div></div><div class=detail-item><small>RSI / TREND</small><b id=mRsi>-</b><div id=mTrend style="font-size:12px"></div></div></div>
-  <div id=mExplain style="background:#f1f5f9;border-radius:12px;padding:12px;font-size:13px;color:#334155"></div>
-  <div style="margin-top:14px"><b style="font-size:13px">Storico >60% per <span id=mHistCoin>BTC</span></b><div id=mHist style="margin-top:8px"></div></div>
-  <button onclick="openChart()" style="margin-top:14px;width:100%;padding:12px;border-radius:12px;border:none;background:#0f172a;color:white;font-weight:700">📈 Apri TradingView</button>
+  <div style="display:flex;justify-content:space-between"><div><b id=mCoin>BTC</b><div id=mPrice style="color:#64748b;font-size:11px"></div></div><button onclick="closeModal()" style="width:28px;height:28px;border-radius:999px;border:none;background:#f1f5f9">✕</button></div>
+  <div class=grid2>
+    <div class=item><small>SEGNALE / CONF</small><b id=mSignal>-</b><div id=mConf style="font-size:10px;color:#64748b"></div><div style="margin-top:4px"><small>B <span id=mBull>-</span> vs Bear <span id=mBear>-</span></small></div></div>
+    <div class=item><small>RSI / ADX / TREND</small><b id=mRsi>-</b><div id=mTrend style="font-size:10px"></div><div style="font-size:10px" id=mAdx></div></div>
+    <div class=item><small>EMA50 / EMA200</small><b id=mEma>-</b><div id=mEmaDetail style="font-size:10px;color:#64748b"></div></div>
+    <div class=item><small>BB / MACD / VOL</small><b id=mBb>-</b><div id=mMacd style="font-size:10px;color:#64748b"></div></div>
+  </div>
+  <div style="background:#f1f5f9;border-radius:10px;padding:8px;margin:6px 0"><small style="font-weight:700;font-size:11px">Entry / SL / TP (ATR)</small><div style="display:flex;gap:6px;margin-top:4px;font-size:11px"><div>Entry <b id=mEntry>-</b></div><div>SL <b id=mSL style="color:#dc2626">-</b></div><div>TP <b id=mTP style="color:#16a34a">-</b></div></div></div>
+  <div><small style="font-weight:700;font-size:11px">Perché:</small><div id=mReasons style="margin-top:4px"></div></div>
+  <div style="margin-top:10px"><b style="font-size:11px">Storico <span id=mHistCoin>BTC</span></b><div id=mHist style="margin-top:4px"></div></div>
+  <button onclick="openChart()" style="margin-top:10px;width:100%;padding:9px;border-radius:10px;border:none;background:#0f172a;color:white;font-weight:700;font-size:12px">📈 TradingView</button>
 </div></div>
 <script>
 let curTF='4H', lastData=null, currentDetail=null;
 const VAPID_PUBLIC_KEY="BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ";
-function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const rawData=window.atob(base64);return Uint8Array.from([...rawData].map(c=>c.charCodeAt(0)));}
+function urlBase64ToUint8Array(b64){const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
 async function subscribePush(){
   try{
     const reg=await navigator.serviceWorker.register('/sw.js');
-    let existing=await reg.pushManager.getSubscription();
-    if(existing){try{await existing.unsubscribe();}catch(e){}}
-    const perm=await Notification.requestPermission();
-    if(perm!=='granted'){alert('Permesso negato');return;}
+    let ex=await reg.pushManager.getSubscription(); if(ex){try{await ex.unsubscribe();}catch{}}
+    const perm=await Notification.requestPermission(); if(perm!=='granted'){alert('Permesso negato');return;}
     const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
     const res=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});const j=await res.json();
-    document.getElementById('subStatus').innerText='Push: ATTIVO '+j.total;
-    alert('Push attiva! Tot: '+j.total);
-  }catch(e){alert('Errore push: '+e.message);}
+    document.getElementById('subStatus').innerText='Push: ATTIVO '+j.total+' TF:5m 15m 1H 4H 1D >60%'; alert('Push ALL TF attiva Tot:'+j.total);
+  }catch(e){alert('Errore push:'+e.message);}
 }
-async function testPush(){
-  try{
-    const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});
-    const j=await r.json();
-    alert('Test inviato a '+j.sent_to+' dispositivi. Subs: '+j.subs);
-  }catch(e){alert('Errore test: '+e.message);}
-}
+async function testPush(){try{const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});const j=await r.json();alert('Test '+j.sent_to+' disp Subs:'+j.subs+' TF '+curTF);}catch(e){alert(e.message);}}
 function colorFor(s){return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}
 function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}
 async function loadTF(tf){
   curTF=tf; document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); document.getElementById('b'+tf).classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:30px;text-align:center;color:#94a3b8">Caricamento...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">Calcolo V2 '+tf+' >60%...</div>';
   try{
     const res=await fetch('/api/signals?tf='+tf); const d=await res.json(); lastData=d;
     document.getElementById('globale').innerText=d.globale; document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=d.globale+' • TF '+tf; document.getElementById('agg').innerText=d.updated;
+    document.getElementById('globaleSub').innerText=d.globale+' • TF '+tf+(tf.includes('m')?' ⚡ SCALP':' Swing')+' >60% PUSH'; document.getElementById('agg').innerText=d.updated;
     let html='';
-    for(let [name, info] of Object.entries(d.coins)){
+    for(let [name,info] of Object.entries(d.coins)){
       const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro'; const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
-      const priceFmt = info.price>=1000 ? '$'+info.price.toFixed(2) : '$'+info.price.toFixed(2);
-      html+=`<div class=coin-row onclick="openDetails('${name}')"><div style="display:flex;gap:12px;align-items:center"><div class="coin-icon ${icon}">${ico}</div><div><b>${name}</b><div style="font-size:12px;color:#64748b">${info.symbol} • RSI ${info.rsi} • ${info.trend}</div><div style="font-size:11px;color:#94a3b8">Affidabilità ${info.conf}%</div></div></div><div style="text-align:right"><span class="badge ${bgFor(info.signal)}">${info.signal} ${info.conf}%</span><div style="font-weight:800;margin-top:4px">${priceFmt}</div><div style="font-size:11px;color:#94a3b8">LIVE USDT ›</div></div></div>`;
+      html+=`<div class=coin-row onclick="openDetails('${name}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${icon}">${ico}</div><div><b>${name} <span style="font-size:9px;color:#64748b">ADX ${info.adx.toFixed(0)}</span></b><div style="font-size:10px;color:#64748b">RSI ${info.rsi} • Vol x${info.vol_ratio.toFixed(1)} • ${info.trend}</div><div style="font-size:9px;color:#94a3b8">${info.reasons.slice(0,2).join(' • ')}</div></div></div><div style="text-align:right"><span class="badge ${bgFor(info.signal)}">${info.signal} ${info.conf}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${info.price.toFixed(2)}</div><div style="font-size:9px;color:#94a3b8">B${info.bullish}/B${info.bearish} • PUSH >60%</div></div></div>`;
     }
     document.getElementById('coins').innerHTML=html;
     loadHistGlobal();
-    if('serviceWorker' in navigator){
-      try{
-        const reg=await navigator.serviceWorker.ready;
-        const s=await reg.pushManager.getSubscription();
-        if(s){
-          document.getElementById('subStatus').innerText='Push: ATTIVO (già iscritto)';
-          await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
-        }
-      }catch{}
-    }
+    if('serviceWorker' in navigator){try{const reg=await navigator.serviceWorker.ready; const s=await reg.pushManager.getSubscription(); if(s){document.getElementById('subStatus').innerText='Push: ATTIVO 5m15m1H4H1D >60%'; await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});}}catch{}
   }catch(e){document.getElementById('coins').innerText='Errore '+e;}
 }
-async function loadHistGlobal(){
-  try{
-    const r=await fetch('/api/history?min_conf=60'); const list=await r.json();
-    const c=document.getElementById('histList');
-    if(!list.length){c.innerHTML='<div style="padding:10px;color:#94a3b8;font-size:13px">Nessun segnale >60% ancora</div>'; return;}
-    c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small></div><div style="text-align:right"><div>$${h.price.toFixed(2)}</div><div style="font-size:11px;color:#94a3b8">${h.time}</div></div></div>`).join('');
-  }catch{}
-}
+async function loadHistGlobal(){try{const r=await fetch('/api/history?min_conf=60'); const list=await r.json(); const c=document.getElementById('histList'); if(!list.length){c.innerHTML='<div style="padding:6px;color:#94a3b8;font-size:10px">Nessun segnale >60%</div>';return;} c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}${h.tf.includes('m')?'⚡':''}</small></div><div style="text-align:right"><div>$${h.price.toFixed(2)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');}catch{}}
 function toggleHist(){const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'){l.style.display='block';a.innerText='▲';loadHistGlobal();}else{l.style.display='none';a.innerText='▼'}}
 async function openDetails(coin){
   if(!lastData) return; const info=lastData.coins[coin]; if(!info) return; currentDetail=coin;
-  document.getElementById('mCoin').innerText=coin+' • '+info.symbol; document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' USDT LIVE';
+  document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • PUSH >60% '+curTF; document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' USDT • ADX '+info.adx.toFixed(1);
   document.getElementById('mSignal').innerText=info.signal; document.getElementById('mSignal').style.color=colorFor(info.signal);
-  document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%'; document.getElementById('mRsi').innerText=info.rsi; document.getElementById('mTrend').innerText=info.trend;
+  document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%'; document.getElementById('mBull').innerText=info.bullish; document.getElementById('mBear').innerText=info.bearish;
+  document.getElementById('mRsi').innerText='RSI '+info.rsi; document.getElementById('mTrend').innerText=info.trend; document.getElementById('mAdx').innerText='ADX '+info.adx.toFixed(1)+' Vol x'+info.vol_ratio.toFixed(2);
+  document.getElementById('mEma').innerText='$'+info.ema50.toFixed(2)+' / $'+info.ema200.toFixed(2); document.getElementById('mEmaDetail').innerText=info.ema50>info.ema200?'EMA50>200 rialzista':'EMA50<200 ribassista';
+  document.getElementById('mBb').innerText='BB '+(info.bb_up?info.bb_up.toFixed(0):'-')+'/'+(info.bb_low?info.bb_low.toFixed(0):'-'); document.getElementById('mMacd').innerText='MACD '+info.macd.toFixed(2)+' vs '+info.macd_signal.toFixed(2);
+  document.getElementById('mEntry').innerText='$'+info.price.toFixed(2); document.getElementById('mSL').innerText=info.sl?'$'+info.sl.toFixed(2):'-'; document.getElementById('mTP').innerText=info.tp?'$'+info.tp.toFixed(2):'-';
   document.getElementById('mHistCoin').innerText=coin;
-  document.getElementById('mExplain').innerText=`RSI ${info.rsi} ${info.trend} affidabilità ${info.conf}% - Prezzo USDT live ${info.symbol}`;
+  document.getElementById('mReasons').innerHTML=info.reasons.map(r=>`<span class=reason>${r}</span>`).join(' ');
   document.getElementById('modal').classList.add('show');
-  try{
-    const r=await fetch('/api/history?coin='+coin+'&min_conf=60'); const list=await r.json();
-    document.getElementById('mHist').innerHTML = list.length ? list.slice(0,8).map(h=>`<div class=hist-item><div><b>${h.tf}</b> ${h.signal} ${h.conf}%</div><div>${h.time} $${h.price.toFixed(2)}</div></div>`).join('') : '<div style="font-size:12px;color:#94a3b8">Nessuno storico >60%</div>';
-  }catch{}
+  try{const r=await fetch('/api/history?coin='+coin+'&min_conf=60'); const list=await r.json(); document.getElementById('mHist').innerHTML=list.length?list.slice(0,8).map(h=>`<div class=hist-item><div><b>${h.tf}</b> ${h.signal} ${h.conf}%</div><div>${h.time} $${h.price.toFixed(0)}</div></div>`).join(''):'<div style="font-size:10px;color:#94a3b8">Nessuno</div>';}catch{}
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 function openChart(){if(!currentDetail)return;const map={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}
-loadTF('4H'); setInterval(()=>loadTF(curTF),30000);
+loadTF('4H'); setInterval(()=>loadTF(curTF),25000);
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 </script>
 </body></html>
