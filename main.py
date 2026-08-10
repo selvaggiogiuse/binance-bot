@@ -1,11 +1,19 @@
 from flask import Flask, jsonify, Response, request
 import os, requests, time, math
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+try:
+    from zoneinfo import ZoneInfo
+    def rome_now():
+        return datetime.now(ZoneInfo("Europe/Rome"))
+except:
+    def rome_now():
+        return datetime.now(timezone.utc) + timedelta(hours=2)
 
 app = Flask(__name__)
 OHLC_CACHE = {}
 CACHE_TTL = 60
-PAIRS = {"BTC": "XBTUSD","ETH": "ETHUSD","ORO": "PAXGUSD"}
+PAIRS_KRAKEN = {"BTC": "XBTUSD","ETH": "ETHUSD","ORO": "PAXGUSD"}
+PAIRS_BINANCE = {"BTC": "BTCUSDT","ETH": "ETHUSDT","ORO": "PAXGUSDT"}
 TF_MAP = {"5m": 5,"15m": 15,"1H": 60,"4H": 240,"1D": 1440}
 
 def ema_calc(data, period):
@@ -63,7 +71,7 @@ def get_ohlc(coin, tf):
     key = f"{coin}_{tf}"; now = time.time()
     if key in OHLC_CACHE and now - OHLC_CACHE[key][0] < CACHE_TTL: return OHLC_CACHE[key][1]
     try:
-        pair = PAIRS[coin]; interval = TF_MAP.get(tf, 240)
+        pair = PAIRS_KRAKEN[coin]; interval = TF_MAP.get(tf, 240)
         url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={interval}"
         r = requests.get(url, timeout=3); j = r.json()
         result = j.get("result", {}); ohlc = None
@@ -109,7 +117,20 @@ def compute_from_ohlc(ohlc, live_price=None):
     else: sl = close_price - atr; tp = close_price + atr
     return {"price": close_price,"rsi": round(rsi,1),"signal": signal,"conf": conf,"trend": trend,"ema50": ema50,"ema200": ema200,"bb_up": bb_up,"bb_low": bb_low,"macd": macd,"macd_signal": macd_sig,"vol_ratio": round(vol_ratio,2),"adx": round(adx,0),"atr": round(atr,2),"sl": sl,"tp": tp,"reasons": reasons[:4],"bullish": int(bull_pct),"bearish": int(100-bull_pct)}
 
-def kraken_fast_price():
+def binance_fast_price():
+    # Prezzo LIVE da Binance = identico a TradingView BINANCE:BTCUSDT
+    try:
+        out={}
+        for coin, sym in PAIRS_BINANCE.items():
+            r=requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={sym}", timeout=2)
+            j=r.json()
+            p=float(j["price"])
+            out[coin]=p
+        return out
+    except:
+        return {}
+
+def kraken_fast_price_fallback():
     try:
         r=requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,PAXGUSD", timeout=2); j=r.json(); out={}
         for k,v in j.get("result",{}).items():
@@ -121,10 +142,15 @@ def kraken_fast_price():
     except: return {}
 
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V7.2 FIX STORICO >60% SOLO COMPRA/VENDI","time":datetime.now().isoformat(),"cache":len(OHLC_CACHE)})
+def ping(): return jsonify({"ok":True,"msg":"V7.4 PREZZO BINANCE + ORARIO ROMA + STORICO FIX","time":rome_now().isoformat(),"cache":len(OHLC_CACHE)})
 @app.route("/api/signals")
 def signals():
-    tf = request.args.get("tf","4H"); live_prices = kraken_fast_price(); coins_data = {}
+    tf = request.args.get("tf","4H")
+    # Prova Binance prima, se fallisce usa Kraken
+    live_prices = binance_fast_price()
+    if not live_prices: live_prices = kraken_fast_price_fallback()
+    source_name = "Binance" if "BTC" in live_prices and live_prices.get("BTC",0)>1000 else "Kraken"
+    coins_data = {}
     for coin in ["BTC","ETH","ORO"]:
         ohlc = get_ohlc(coin, tf); live = live_prices.get(coin)
         if ohlc:
@@ -140,37 +166,26 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": datetime.now().strftime("%H:%M:%S"),"source": f"Kraken REAL TF {tf} BTC ${btc_price:.0f} - RSI vero"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} REAL TF {tf} BTC ${btc_price:.2f} - RSI vero • Roma {rome_now().strftime('%H:%M')}"})
 @app.route("/api/history")
 def history():
-    # FIX: mostra SOLO COMPRA/VENDI con conf >=60% - TUTTI i TF
-    live = kraken_fast_price()
+    live = binance_fast_price()
+    if not live: live = kraken_fast_price_fallback()
     all_signals = []
-    # controlla cache esistente + prova a caricare tutti i TF
     tfs_to_check = ["5m","15m","1H","4H","1D"]
     for tf in tfs_to_check:
         for coin in ["BTC","ETH","ORO"]:
             ohlc = get_ohlc(coin, tf)
             if not ohlc: continue
             comp = compute_from_ohlc(ohlc, live.get(coin))
-            # FILTRO VERO: solo COMPRA/VENDI e >=60%
             if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= 60:
                 all_signals.append({
-                    "coin": coin,
-                    "tf": tf,
-                    "signal": comp["signal"],
-                    "conf": comp["conf"],
-                    "rsi": comp["rsi"],
-                    "price": comp["price"],
-                    "time": f"{tf} • {datetime.now().strftime('%H:%M')}",
-                    "adx": comp["adx"],
-                    "reasons": comp["reasons"]
+                    "coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],
+                    "time": f"{tf} • {rome_now().strftime('%H:%M')}",
+                    "adx": comp["adx"],"reasons": comp["reasons"]
                 })
-    # ordina per conf più alta
     all_signals.sort(key=lambda x: x["conf"], reverse=True)
-    # se vuoto (mercato piatto), ritorna messaggio vuoto - non FERMO 55%
-    if not all_signals:
-        return jsonify([])
+    if not all_signals: return jsonify([])
     return jsonify(all_signals[:15])
 
 @app.route("/api/push/subscribe", methods=["POST"])
@@ -178,13 +193,13 @@ def sub(): return jsonify({"ok":True,"total":1})
 @app.route("/api/push/test", methods=["POST"])
 def testp(): return jsonify({"ok":True,"sent_to":1,"subs":1})
 @app.route("/sw.js")
-def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.2 FIX')})", mimetype="application/javascript")
+def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.4 BINANCE')})", mimetype="application/javascript")
 @app.route("/")
 @app.route("/app")
 def app_page():
     return """
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi PRO V7.2 STORICO FIX</title>
+<title>Vendi PRO V7.4 BINANCE PRICE</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
@@ -212,7 +227,7 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 .empty-hist{padding:16px;text-align:center;color:#64748b;font-size:12px}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✓</div><div><b>Vendi PRO V7.2 STORICO FIX</b><br><small>FIX storico >60% solo COMPRA/VENDI</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✓</div><div><b>Vendi PRO V7.4 BINANCE</b><br><small>Prezzo Binance = TradingView + Roma FIX</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
 <div class="tfs">
 <button onclick="loadTF('5m')" id=b5m>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
@@ -255,7 +270,7 @@ function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg
 async function loadTF(tf){
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico RSI vero '+tf+' da Kraken...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico RSI vero '+tf+' da Binance+Kraken...</div>';
   try{
     const res=await fetch('/api/signals?tf='+tf); const d=await res.json(); lastData=d;
     document.getElementById('globale').innerText=d.globale||'...'; document.getElementById('globale').style.color=colorFor(d.globale);
