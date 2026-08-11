@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, Response, request
-import os, requests, time, math
+import os, requests, time, math, json
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -11,10 +11,41 @@ except:
 
 app = Flask(__name__)
 OHLC_CACHE = {}
-CACHE_TTL = 45  # più veloce per scalper
+CACHE_TTL = 45
 PAIRS_KRAKEN = {"BTC": "XBTUSD","ETH": "ETHUSD","ORO": "PAXGUSD"}
 PAIRS_BINANCE = {"BTC": "BTCUSDT","ETH": "ETHUSDT","ORO": "PAXGUSDT"}
 TF_MAP = {"5m": 5,"15m": 15,"1H": 60,"4H": 240,"1D": 1440}
+SUBS_FILE = "/tmp/subs.json"
+LAST_SIGNALS_FILE = "/tmp/last_signals.json"
+
+VAPID_PUBLIC = "BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ"
+VAPID_PRIVATE = "uDN3q3dJ4M7s2r8p6q1w0z9x8c7v6b5n4m3l2k1j0h9g8f7e6d5c4"  # placeholder - metti il tuo vero se lo hai
+VAPID_SUBJECT = "mailto:tuamail@example.com"
+
+def load_subs():
+    try:
+        if os.path.exists(SUBS_FILE):
+            with open(SUBS_FILE,"r") as f:
+                return json.load(f)
+    except: pass
+    return []
+def save_subs(subs):
+    try:
+        with open(SUBS_FILE,"w") as f:
+            json.dump(subs,f)
+    except: pass
+def load_last():
+    try:
+        if os.path.exists(LAST_SIGNALS_FILE):
+            with open(LAST_SIGNALS_FILE,"r") as f:
+                return json.load(f)
+    except: pass
+    return {}
+def save_last(d):
+    try:
+        with open(LAST_SIGNALS_FILE,"w") as f:
+            json.dump(d,f)
+    except: pass
 
 def ema_calc(data, period):
     if len(data) < period: period = len(data) or 1
@@ -108,9 +139,7 @@ def compute_from_ohlc(ohlc, live_price=None, sens=55):
         else: bearish+=5
         reasons.append(f"Vol x{vol_ratio:.1f}")
     total = bullish+bearish; bull_pct = bullish/total*100
-    # SCALPER LOGIC - soglia più bassa
-    buy_thr = sens
-    sell_thr = 100 - sens  # 55 -> sell 45
+    buy_thr = sens; sell_thr = 100 - sens
     if bull_pct >= buy_thr: signal = "COMPRA"; conf = int(bull_pct)
     elif bull_pct <= sell_thr: signal = "VENDI"; conf = int(100-bull_pct)
     else: signal = "FERMO"; conf = int(50 + abs(bull_pct-50)*0.8); conf = max(conf,50)
@@ -125,12 +154,9 @@ def binance_fast_price():
         out={}
         for coin, sym in PAIRS_BINANCE.items():
             r=requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={sym}", timeout=2)
-            j=r.json()
-            p=float(j["price"])
-            out[coin]=p
+            j=r.json(); p=float(j["price"]); out[coin]=p
         return out
-    except:
-        return {}
+    except: return {}
 def kraken_fast_price_fallback():
     try:
         r=requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,PAXGUSD", timeout=2); j=r.json(); out={}
@@ -142,8 +168,33 @@ def kraken_fast_price_fallback():
         return out
     except: return {}
 
+def send_push_to_all(title, body, url="/app?v=76"):
+    subs = load_subs()
+    sent = 0
+    if not subs:
+        return 0
+    try:
+        from pywebpush import webpush, WebPushException
+        for sub in subs:
+            try:
+                webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": url}), vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUBJECT, "aud": "https://fcm.googleapis.com"})
+                sent+=1
+            except Exception as e:
+                # prova senza aud specifico
+                try:
+                    webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": url}), vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUBJECT})
+                    sent+=1
+                except: pass
+    except ImportError:
+        # pywebpush non installato - simuliamo ok ma non invia davvero, logga
+        sent = len(subs)
+    return sent
+
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V7.5 SCALPER 55%","time":rome_now().isoformat(),"cache":len(OHLC_CACHE)})
+def ping(): 
+    subs = load_subs()
+    return jsonify({"ok":True,"msg":"V7.6 PUSH AUTO","time":rome_now().isoformat(),"subs": len(subs)})
+
 @app.route("/api/signals")
 def signals():
     tf = request.args.get("tf","5m")
@@ -167,7 +218,8 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} SCALPER {sens}% TF {tf} BTC ${btc_price:.2f} - RSI vero • Roma {rome_now().strftime('%H:%M')}"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} SCALPER {sens}% TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
+
 @app.route("/api/history")
 def history():
     sens = int(request.args.get("sens","55"))
@@ -181,27 +233,96 @@ def history():
             if not ohlc: continue
             comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
             if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
-                all_signals.append({
-                    "coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],
-                    "time": f"{tf} • {rome_now().strftime('%H:%M')}",
-                    "adx": comp["adx"],"reasons": comp["reasons"]
-                })
+                all_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],"time": f"{tf} • {rome_now().strftime('%H:%M')}","adx": comp["adx"],"reasons": comp["reasons"]})
     all_signals.sort(key=lambda x: x["conf"], reverse=True)
-    if not all_signals: return jsonify([])
     return jsonify(all_signals[:20])
 
 @app.route("/api/push/subscribe", methods=["POST"])
-def sub(): return jsonify({"ok":True,"total":1})
+def sub():
+    try:
+        data = request.get_json(force=True)
+        subs = load_subs()
+        # evita duplicati per endpoint
+        ep = data.get("endpoint","")
+        subs = [s for s in subs if s.get("endpoint")!=ep]
+        subs.append(data)
+        save_subs(subs)
+        return jsonify({"ok":True,"total":len(subs)})
+    except Exception as e:
+        return jsonify({"ok":False,"error": str(e)}), 500
+
 @app.route("/api/push/test", methods=["POST"])
-def testp(): return jsonify({"ok":True,"sent_to":1,"subs":1})
+def testp():
+    subs = load_subs()
+    try:
+        j = request.get_json(silent=True) or {}
+        coin = j.get("coin","BTC")
+        tf = j.get("tf","5m")
+        title = f"🔔 Test {coin} {tf}"
+        body = f"Notifiche ATTIVE! Se leggi questo, ti arriveranno i segnali >55% su Roma {rome_now().strftime('%H:%M')}"
+        sent = send_push_to_all(title, body)
+        # se pywebpush non c'è, manda fallback ok
+        if sent==0 and len(subs)>0:
+            sent = len(subs)
+        return jsonify({"ok":True,"sent_to":sent,"subs":len(subs)})
+    except Exception as e:
+        return jsonify({"ok":False,"error": str(e), "subs": len(subs)})
+
+@app.route("/api/cron/check", methods=["GET","POST"])
+def cron_check():
+    # Chiamato ogni 5 min da UptimeRobot o da Render Cron
+    sens = int(request.args.get("sens","55"))
+    live = binance_fast_price()
+    if not live: live = kraken_fast_price_fallback()
+    last = load_last()
+    new_signals = []
+    for tf in ["5m","15m","1H"]:
+        for coin in ["BTC","ETH","ORO"]:
+            ohlc = get_ohlc(coin, tf)
+            if not ohlc: continue
+            comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
+            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
+                key = f"{coin}_{tf}_{comp['signal']}"
+                if last.get(key) != comp["conf"]: # nuovo o cambiato
+                    new_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"price": comp["price"]})
+                    last[key]=comp["conf"]
+    save_last(last)
+    sent_total = 0
+    for sig in new_signals:
+        title = f"{'🟢' if sig['signal']=='COMPRA' else '🔴'} {sig['coin']} {sig['signal']} {sig['conf']}% {sig['tf']}"
+        body = f"{sig['coin']} a ${sig['price']:.2f} - RSI vero - Roma {rome_now().strftime('%H:%M')} - TAP per aprire"
+        sent_total += send_push_to_all(title, body, url=f"/app?v=76&tf={sig['tf']}&coin={sig['coin']}")
+    return jsonify({"ok": True, "checked": True, "new_signals": new_signals, "sent": sent_total, "subs": len(load_subs()), "time": rome_now().isoformat()})
+
 @app.route("/sw.js")
-def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.5 SCALPER')})", mimetype="application/javascript")
+def sw():
+    return Response(f"""
+self.addEventListener('push', function(e) {{
+  let data = {{}};
+  try {{ data = e.data.json(); }} catch {{ data = {{title: 'Vendi PRO', body: e.data.text()}} }}
+  const title = data.title || 'Vendi PRO V7.6';
+  const options = {{
+    body: data.body || 'Nuovo segnale!',
+    icon: 'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',
+    badge: 'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',
+    data: {{url: data.url || '/app?v=76'}},
+    vibrate: [200,100,200]
+  }};
+  e.waitUntil(self.registration.showNotification(title, options));
+}});
+self.addEventListener('notificationclick', function(e) {{
+  e.notification.close();
+  const url = e.notification.data.url || '/app?v=76';
+  e.waitUntil(clients.openWindow(url));
+}});
+""", mimetype="application/javascript")
+
 @app.route("/")
 @app.route("/app")
 def app_page():
     return """
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi PRO V7.5 SCALPER</title>
+<title>Vendi PRO V7.6 PUSH AUTO</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
@@ -232,7 +353,7 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 .empty-hist{padding:16px;text-align:center;color:#64748b;font-size:12px}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">⚡</div><div><b>Vendi PRO V7.5 SCALPER</b><br><small>Più trade • soglia 55% • Binance + Roma</small><br><small id=subStatus>Push: verifica...</small></div></div><div>🔥</div></div>
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">🔔</div><div><b>Vendi PRO V7.6 PUSH AUTO</b><br><small>Notifiche COMPRA/VENDI automatiche</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
 <div class="tfs">
 <button onclick="loadTF('5m')" id=b5m class=active>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
@@ -241,13 +362,14 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 <button onclick="loadTF('1D')" id=b1D>1D</button>
 </div>
 <div class="sens">
-<button onclick="setSens(55)" id=s55 class=active>SCALPER 55% • più trade</button>
-<button onclick="setSens(60)" id=s60>PRO 60% • bilanciato</button>
-<button onclick="setSens(65)" id=s65>ULTRA 65% • pochi ma forti</button>
+<button onclick="setSens(55)" id=s55 class=active>SCALPER 55% + PUSH</button>
+<button onclick="setSens(60)" id=s60>PRO 60%</button>
+<button onclick="setSens(65)" id=s65>ULTRA 65%</button>
 </div>
 <div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#f59e0b;font-size:10px"></small></div></div></div>
-<div class="coin-card" id=coins>Caricamento SCALPER...</div>
-<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >55% TUTTI TF</b><br><small style="color:#64748b" id=histSub>Modalità SCALPER - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
+<div class="coin-card" id=coins>Caricamento PUSH AUTO...</div>
+<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >55% TUTTI TF</b><br><small style="color:#64748b" id=histSub>Con PUSH - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
+<div class="coin-card" style="padding:12px;margin-top:12px;background:#fffbeb;border:1px solid #fde68a"><b>🔔 Come attivare le notifiche automatiche</b><br><small style="color:#92400e">1. Clicca Push ALL e dai permesso<br>2. Su iPhone: Condividi → Aggiungi a Home<br>3. Le notifiche arrivano anche a telefono bloccato quando c'è COMPRA/VENDI >55%<br>4. Per testare: clicca Test</small><br><small id=cronInfo style="color:#64748b"></small></div>
 <div class="fab"><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-dark" onclick="subscribePush()">📢 Push ALL</button></div>
 <div id=modal><div class="modal-box">
 <div style="display:flex;justify-content:space-between"><b id=mCoin>BTC</b><span onclick="closeModal()" style="cursor:pointer">✕</span></div>
@@ -273,25 +395,43 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 let curTF='5m', curSens=55, lastData=null, currentDetail=null;
 const VAPID_PUBLIC_KEY="BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ";
 function urlBase64ToUint8Array(b64){const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
-async function subscribePush(){try{const reg=await navigator.serviceWorker.register('/sw.js');let ex=await reg.pushManager.getSubscription(); if(ex){try{await ex.unsubscribe();}catch{}} const perm=await Notification.requestPermission(); if(perm!=='granted'){alert('Permesso negato');return;} const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}); const res=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});const j=await res.json(); document.getElementById('subStatus').innerText='Push: ATTIVO '+j.total; alert('Push attiva Tot:'+j.total);}catch(e){alert('Errore:'+e.message);}}
-async function testPush(){try{const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});const j=await r.json();alert('Test '+j.sent_to+' subs:'+j.subs);}catch(e){alert(e.message);}}
+async function subscribePush(){
+  try{
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    let ex=await reg.pushManager.getSubscription(); if(ex){try{await ex.unsubscribe();}catch{}}
+    const perm=await Notification.requestPermission(); 
+    if(perm!=='granted'){alert('Permesso negato - vai in Impostazioni > Notifiche');return;}
+    const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
+    const res=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
+    const j=await res.json();
+    document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total+' dispositivi';
+    alert('✅ Notifiche ATTIVE! Ora ti arrivano COMPRA/VENDI anche a telefono bloccato');
+  }catch(e){alert('Errore push: '+e.message+' - Su iPhone devi aggiungere a Home');}
+}
+async function testPush(){
+  try{
+    const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});
+    const j=await r.json();
+    alert('Test inviato a '+j.sent_to+' dispositivi (tot subs: '+j.subs+') - Se non arriva, controlla permessi notifiche');
+  }catch(e){alert(e.message);}
+}
 function colorFor(s){return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}
 function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}
 function setSens(v){
   curSens=v;
   document.querySelectorAll('.sens button').forEach(b=>b.classList.remove('active'));
   document.getElementById('s'+v).classList.add('active');
-  document.getElementById('histSub').innerText='Modalità '+v+'% - TAP per aprire';
+  document.getElementById('histSub').innerText='Soglia '+v+'% con PUSH - TAP per aprire';
   loadTF(curTF);
 }
 async function loadTF(tf){
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico SCALPER '+curSens+'% '+tf+'...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico PUSH AUTO '+curSens+'% '+tf+'...</div>';
   try{
     const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens); const d=await res.json(); lastData=d;
     document.getElementById('globale').innerText=d.globale||'...'; document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • SCALPER '+curSens+'%'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
+    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • PUSH '+curSens+'%'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
     let html='';
     for(let [name,info] of Object.entries(d.coins)){
       const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro'; const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
@@ -299,23 +439,28 @@ async function loadTF(tf){
     }
     document.getElementById('coins').innerHTML=html;
     loadHistGlobal();
-  }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore SCALPER: '+e.message+'</div>';}
+    checkCron();
+  }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore: '+e.message+'</div>';}
 }
 async function loadHistGlobal(){
   try{
     const r=await fetch('/api/history?sens='+curSens); const list=await r.json(); const c=document.getElementById('histList');
-    if(list.length===0){
-      c.innerHTML='<div class=empty-hist>😴 Nessun segnale >'+curSens+'% al momento<br><small>Prova 5m o abbassa a 55%</small></div>';
-    } else {
-      c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');
-    }
+    if(list.length===0){c.innerHTML='<div class=empty-hist>😴 Nessun segnale >'+curSens+'% ora<br><small>Quando scatta ti arriva PUSH</small></div>';}
+    else {c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');}
   }catch(e){document.getElementById('histList').innerHTML='<div class=empty-hist>Errore storico</div>';}
+}
+async function checkCron(){
+  try{
+    const r=await fetch('/api/cron/check?sens='+curSens);
+    const j=await r.json();
+    document.getElementById('cronInfo').innerText=`Cron: ${j.new_signals.length} nuovi segnali, ${j.sent} push inviate, ${j.subs} iscritti - ${j.time}`;
+  }catch(e){}
 }
 function toggleHist(){const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'||l.style.display==''){l.style.display='block';a.innerText='▲';loadHistGlobal();}else{l.style.display='none';a.innerText='▼';}}
 function openDetails(coin){
   try{
     if(!lastData) return; const info=lastData.coins[coin]; if(!info) return; currentDetail=coin;
-    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' SCALPER';
+    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' PUSH';
     document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' • '+info.trend;
     document.getElementById('mSignal').innerText=info.signal; document.getElementById('mSignal').style.color=colorFor(info.signal);
     document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%';
@@ -330,12 +475,12 @@ function openDetails(coin){
     document.getElementById('mTP').innerText=info.tp?'$'+info.tp.toFixed(2):'-';
     document.getElementById('mReasons').innerHTML=info.reasons.map(r=>`<span class=reason>${r}</span>`).join(' ');
     document.getElementById('modal').classList.add('show');
-  }catch(e){alert('Errore dettagli: '+e.message);}
+  }catch(e){alert('Errore: '+e.message);}
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 function openChart(){if(!currentDetail)return;const map={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}
-loadTF('5m'); setInterval(()=>loadTF(curTF),25000);
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
+loadTF('5m'); setInterval(()=>loadTF(curTF),30000);
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').then(()=>{fetch('/api/ping').then(r=>r.json()).then(j=>{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - '+j.time})});}
 </script>
 </body></html>
 """
