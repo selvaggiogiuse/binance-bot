@@ -11,7 +11,7 @@ except:
 
 app = Flask(__name__)
 OHLC_CACHE = {}
-CACHE_TTL = 60
+CACHE_TTL = 45  # più veloce per scalper
 PAIRS_KRAKEN = {"BTC": "XBTUSD","ETH": "ETHUSD","ORO": "PAXGUSD"}
 PAIRS_BINANCE = {"BTC": "BTCUSDT","ETH": "ETHUSDT","ORO": "PAXGUSDT"}
 TF_MAP = {"5m": 5,"15m": 15,"1H": 60,"4H": 240,"1D": 1440}
@@ -81,7 +81,7 @@ def get_ohlc(coin, tf):
         OHLC_CACHE[key] = (now, ohlc); return ohlc
     except: return None
 
-def compute_from_ohlc(ohlc, live_price=None):
+def compute_from_ohlc(ohlc, live_price=None, sens=55):
     closes = [float(x[4]) for x in ohlc]; highs = [float(x[2]) for x in ohlc]; lows = [float(x[3]) for x in ohlc]; volumes = [float(x[6]) for x in ohlc]
     close_price = live_price if live_price else closes[-1]; closes[-1] = close_price
     rsi = rsi_calc(closes); ema50 = ema_calc(closes, 50); ema200 = ema_calc(closes, 200)
@@ -103,14 +103,17 @@ def compute_from_ohlc(ohlc, live_price=None):
     else: bearish+=10; reasons.append("MACD ↓")
     if close_price > bb_up: bearish+=10; reasons.append("Sopra BB upper")
     elif close_price < bb_low: bullish+=10; reasons.append("Sotto BB lower")
-    if vol_ratio > 1.3:
+    if vol_ratio > 1.2:
         if bullish>bearish: bullish+=5
         else: bearish+=5
         reasons.append(f"Vol x{vol_ratio:.1f}")
     total = bullish+bearish; bull_pct = bullish/total*100
-    if bull_pct >= 60: signal = "COMPRA"; conf = int(bull_pct)
-    elif bull_pct <= 40: signal = "VENDI"; conf = int(100-bull_pct)
-    else: signal = "FERMO"; conf = int(50 + abs(bull_pct-50)*0.6); conf = max(conf,55)
+    # SCALPER LOGIC - soglia più bassa
+    buy_thr = sens
+    sell_thr = 100 - sens  # 55 -> sell 45
+    if bull_pct >= buy_thr: signal = "COMPRA"; conf = int(bull_pct)
+    elif bull_pct <= sell_thr: signal = "VENDI"; conf = int(100-bull_pct)
+    else: signal = "FERMO"; conf = int(50 + abs(bull_pct-50)*0.8); conf = max(conf,50)
     trend = "Rialzista" if bullish>bearish else "Ribassista" if bearish>bullish else "Laterale"
     if signal == "COMPRA": sl = close_price - atr*1.5; tp = close_price + atr*2.5
     elif signal == "VENDI": sl = close_price + atr*1.5; tp = close_price - atr*2.5
@@ -118,7 +121,6 @@ def compute_from_ohlc(ohlc, live_price=None):
     return {"price": close_price,"rsi": round(rsi,1),"signal": signal,"conf": conf,"trend": trend,"ema50": ema50,"ema200": ema200,"bb_up": bb_up,"bb_low": bb_low,"macd": macd,"macd_signal": macd_sig,"vol_ratio": round(vol_ratio,2),"adx": round(adx,0),"atr": round(atr,2),"sl": sl,"tp": tp,"reasons": reasons[:4],"bullish": int(bull_pct),"bearish": int(100-bull_pct)}
 
 def binance_fast_price():
-    # Prezzo LIVE da Binance = identico a TradingView BINANCE:BTCUSDT
     try:
         out={}
         for coin, sym in PAIRS_BINANCE.items():
@@ -129,7 +131,6 @@ def binance_fast_price():
         return out
     except:
         return {}
-
 def kraken_fast_price_fallback():
     try:
         r=requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,PAXGUSD", timeout=2); j=r.json(); out={}
@@ -142,23 +143,23 @@ def kraken_fast_price_fallback():
     except: return {}
 
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V7.4 PREZZO BINANCE + ORARIO ROMA + STORICO FIX","time":rome_now().isoformat(),"cache":len(OHLC_CACHE)})
+def ping(): return jsonify({"ok":True,"msg":"V7.5 SCALPER 55%","time":rome_now().isoformat(),"cache":len(OHLC_CACHE)})
 @app.route("/api/signals")
 def signals():
-    tf = request.args.get("tf","4H")
-    # Prova Binance prima, se fallisce usa Kraken
+    tf = request.args.get("tf","5m")
+    sens = int(request.args.get("sens","55"))
     live_prices = binance_fast_price()
     if not live_prices: live_prices = kraken_fast_price_fallback()
-    source_name = "Binance" if "BTC" in live_prices and live_prices.get("BTC",0)>1000 else "Kraken"
+    source_name = "Binance" if live_prices else "Kraken"
     coins_data = {}
     for coin in ["BTC","ETH","ORO"]:
         ohlc = get_ohlc(coin, tf); live = live_prices.get(coin)
         if ohlc:
-            computed = compute_from_ohlc(ohlc, live_price=live)
+            computed = compute_from_ohlc(ohlc, live_price=live, sens=sens)
             coins_data[coin] = {"symbol": f"{coin}USD","price": computed["price"],"rsi": computed["rsi"],"signal": computed["signal"],"conf": computed["conf"],"trend": computed["trend"],"tf": tf,"ema50": computed["ema50"],"ema200": computed["ema200"],"bb_up": computed["bb_up"],"bb_low": computed["bb_low"],"macd": computed["macd"],"macd_signal": computed["macd_signal"],"vol_ratio": computed["vol_ratio"],"adx": computed["adx"],"atr": computed["atr"],"sl": computed["sl"],"tp": computed["tp"],"reasons": computed["reasons"],"bullish": computed["bullish"],"bearish": computed["bearish"]}
         else:
             price = live if live else (64800 if coin=="BTC" else 1910 if coin=="ETH" else 4345)
-            coins_data[coin] = {"symbol": f"{coin}USD","price": price,"rsi": 50.0,"signal": "FERMO","conf": 55,"trend": "Caricamento","tf": tf,"ema50": price*0.99,"ema200": price*0.98,"bb_up": price*1.02,"bb_low": price*0.98,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": price*0.02,"sl": price*0.99,"tp": price*1.01,"reasons": ["OHLC in caricamento...","Riprovo tra 60s"],"bullish": 50,"bearish": 50}
+            coins_data[coin] = {"symbol": f"{coin}USD","price": price,"rsi": 50.0,"signal": "FERMO","conf": 50,"trend": "Caricamento","tf": tf,"ema50": price*0.99,"ema200": price*0.98,"bb_up": price*1.02,"bb_low": price*0.98,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": price*0.02,"sl": price*0.99,"tp": price*1.01,"reasons": ["OHLC in caricamento..."],"bullish": 50,"bearish": 50}
     max_conf=0; globale="FERMO"
     for v in coins_data.values():
         if v["signal"] in ("COMPRA","VENDI") and v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
@@ -166,9 +167,10 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} REAL TF {tf} BTC ${btc_price:.2f} - RSI vero • Roma {rome_now().strftime('%H:%M')}"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} SCALPER {sens}% TF {tf} BTC ${btc_price:.2f} - RSI vero • Roma {rome_now().strftime('%H:%M')}"})
 @app.route("/api/history")
 def history():
+    sens = int(request.args.get("sens","55"))
     live = binance_fast_price()
     if not live: live = kraken_fast_price_fallback()
     all_signals = []
@@ -177,8 +179,8 @@ def history():
         for coin in ["BTC","ETH","ORO"]:
             ohlc = get_ohlc(coin, tf)
             if not ohlc: continue
-            comp = compute_from_ohlc(ohlc, live.get(coin))
-            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= 60:
+            comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
+            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
                 all_signals.append({
                     "coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],
                     "time": f"{tf} • {rome_now().strftime('%H:%M')}",
@@ -186,29 +188,32 @@ def history():
                 })
     all_signals.sort(key=lambda x: x["conf"], reverse=True)
     if not all_signals: return jsonify([])
-    return jsonify(all_signals[:15])
+    return jsonify(all_signals[:20])
 
 @app.route("/api/push/subscribe", methods=["POST"])
 def sub(): return jsonify({"ok":True,"total":1})
 @app.route("/api/push/test", methods=["POST"])
 def testp(): return jsonify({"ok":True,"sent_to":1,"subs":1})
 @app.route("/sw.js")
-def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.4 BINANCE')})", mimetype="application/javascript")
+def sw(): return Response("self.addEventListener('push',e=>{self.registration.showNotification('V7.5 SCALPER')})", mimetype="application/javascript")
 @app.route("/")
 @app.route("/app")
 def app_page():
     return """
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi PRO V7.4 BINANCE PRICE</title>
+<title>Vendi PRO V7.5 SCALPER</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
 body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
-.header{background:linear-gradient(135deg,#0f172a 0%,#10b981 100%);border-radius:20px;padding:16px;color:white;display:flex;justify-content:space-between;align-items:center}
+.header{background:linear-gradient(135deg,#0f172a 0%,#f59e0b 100%);border-radius:20px;padding:16px;color:white;display:flex;justify-content:space-between;align-items:center}
 .logo{width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800}
-.tfs{display:flex;gap:5px;margin:12px 0;overflow-x:auto}
+.tfs{display:flex;gap:5px;margin:10px 0;overflow-x:auto}
 .tfs button{border:none;background:white;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
 .tfs button.active{background:#0f172a;color:white}
+.sens{display:flex;gap:6px;margin:8px 0}
+.sens button{border:1px solid #e2e8f0;background:white;padding:6px 10px;border-radius:999px;font-weight:700;font-size:11px}
+.sens button.active{background:#f59e0b;color:white;border-color:#f59e0b}
 .coin-card{background:white;border-radius:18px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:10px}
 .coin-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f8fafc;cursor:pointer}
 .coin-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:13px}
@@ -227,17 +232,22 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 .empty-hist{padding:16px;text-align:center;color:#64748b;font-size:12px}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✓</div><div><b>Vendi PRO V7.4 BINANCE</b><br><small>Prezzo Binance = TradingView + Roma FIX</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">⚡</div><div><b>Vendi PRO V7.5 SCALPER</b><br><small>Più trade • soglia 55% • Binance + Roma</small><br><small id=subStatus>Push: verifica...</small></div></div><div>🔥</div></div>
 <div class="tfs">
-<button onclick="loadTF('5m')" id=b5m>5m ⚡</button>
+<button onclick="loadTF('5m')" id=b5m class=active>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
 <button onclick="loadTF('1H')" id=b1H>1H</button>
-<button onclick="loadTF('4H')" id=b4H class=active>4H</button>
+<button onclick="loadTF('4H')" id=b4H>4H</button>
 <button onclick="loadTF('1D')" id=b1D>1D</button>
 </div>
-<div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#10b981;font-size:10px"></small></div></div></div>
-<div class="coin-card" id=coins>Caricamento REAL TF...</div>
-<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >60% TUTTI TF</b><br><small style="color:#64748b">Solo COMPRA/VENDI >60% - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
+<div class="sens">
+<button onclick="setSens(55)" id=s55 class=active>SCALPER 55% • più trade</button>
+<button onclick="setSens(60)" id=s60>PRO 60% • bilanciato</button>
+<button onclick="setSens(65)" id=s65>ULTRA 65% • pochi ma forti</button>
+</div>
+<div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#f59e0b;font-size:10px"></small></div></div></div>
+<div class="coin-card" id=coins>Caricamento SCALPER...</div>
+<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >55% TUTTI TF</b><br><small style="color:#64748b" id=histSub>Modalità SCALPER - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
 <div class="fab"><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-dark" onclick="subscribePush()">📢 Push ALL</button></div>
 <div id=modal><div class="modal-box">
 <div style="display:flex;justify-content:space-between"><b id=mCoin>BTC</b><span onclick="closeModal()" style="cursor:pointer">✕</span></div>
@@ -260,21 +270,28 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 <button onclick="openChart()" style="margin-top:10px;width:100%;padding:9px;border-radius:10px;border:none;background:#0f172a;color:white;font-weight:700;font-size:12px">📈 TradingView</button>
 </div></div>
 <script>
-let curTF='4H', lastData=null, currentDetail=null;
+let curTF='5m', curSens=55, lastData=null, currentDetail=null;
 const VAPID_PUBLIC_KEY="BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ";
 function urlBase64ToUint8Array(b64){const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
 async function subscribePush(){try{const reg=await navigator.serviceWorker.register('/sw.js');let ex=await reg.pushManager.getSubscription(); if(ex){try{await ex.unsubscribe();}catch{}} const perm=await Notification.requestPermission(); if(perm!=='granted'){alert('Permesso negato');return;} const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}); const res=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});const j=await res.json(); document.getElementById('subStatus').innerText='Push: ATTIVO '+j.total; alert('Push attiva Tot:'+j.total);}catch(e){alert('Errore:'+e.message);}}
 async function testPush(){try{const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});const j=await r.json();alert('Test '+j.sent_to+' subs:'+j.subs);}catch(e){alert(e.message);}}
 function colorFor(s){return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}
 function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}
+function setSens(v){
+  curSens=v;
+  document.querySelectorAll('.sens button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('s'+v).classList.add('active');
+  document.getElementById('histSub').innerText='Modalità '+v+'% - TAP per aprire';
+  loadTF(curTF);
+}
 async function loadTF(tf){
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico RSI vero '+tf+' da Binance+Kraken...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico SCALPER '+curSens+'% '+tf+'...</div>';
   try{
-    const res=await fetch('/api/signals?tf='+tf); const d=await res.json(); lastData=d;
+    const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens); const d=await res.json(); lastData=d;
     document.getElementById('globale').innerText=d.globale||'...'; document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • REAL'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
+    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • SCALPER '+curSens+'%'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
     let html='';
     for(let [name,info] of Object.entries(d.coins)){
       const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro'; const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
@@ -282,13 +299,13 @@ async function loadTF(tf){
     }
     document.getElementById('coins').innerHTML=html;
     loadHistGlobal();
-  }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore REAL TF: '+e.message+'</div>';}
+  }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore SCALPER: '+e.message+'</div>';}
 }
 async function loadHistGlobal(){
   try{
-    const r=await fetch('/api/history'); const list=await r.json(); const c=document.getElementById('histList');
+    const r=await fetch('/api/history?sens='+curSens); const list=await r.json(); const c=document.getElementById('histList');
     if(list.length===0){
-      c.innerHTML='<div class=empty-hist>😴 Nessun segnale >60% al momento<br><small>Mercato in FERMO su tutti i TF - appena c\\'è un COMPRA/VENDI forte appare qui</small></div>';
+      c.innerHTML='<div class=empty-hist>😴 Nessun segnale >'+curSens+'% al momento<br><small>Prova 5m o abbassa a 55%</small></div>';
     } else {
       c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');
     }
@@ -298,7 +315,7 @@ function toggleHist(){const l=document.getElementById('histList');const a=docume
 function openDetails(coin){
   try{
     if(!lastData) return; const info=lastData.coins[coin]; if(!info) return; currentDetail=coin;
-    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' REAL';
+    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' SCALPER';
     document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' • '+info.trend;
     document.getElementById('mSignal').innerText=info.signal; document.getElementById('mSignal').style.color=colorFor(info.signal);
     document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%';
@@ -317,7 +334,7 @@ function openDetails(coin){
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 function openChart(){if(!currentDetail)return;const map={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}
-loadTF('4H'); setInterval(()=>loadTF(curTF),30000);
+loadTF('5m'); setInterval(()=>loadTF(curTF),25000);
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 </script>
 </body></html>
