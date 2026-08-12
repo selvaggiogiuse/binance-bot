@@ -18,9 +18,10 @@ TF_MAP = {"5m": 5,"15m": 15,"1H": 60,"4H": 240,"1D": 1440}
 SUBS_FILE = "/tmp/subs.json"
 LAST_SIGNALS_FILE = "/tmp/last_signals.json"
 
-VAPID_PUBLIC = "BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ"
-VAPID_PRIVATE = "uDN3q3dJ4M7s2r8p6q1w0z9x8c7v6b5n4m3l2k1j0h9g8f7e6d5c4"  # placeholder - metti il tuo vero se lo hai
-VAPID_SUBJECT = "mailto:tuamail@example.com"
+# CHIAVI VAPID VERE - GENERATE ORA
+VAPID_PUBLIC = "BCOxkGJ3MRDgLq_3IquF1JxqyP1YbeC66cljBJvfHHB5419NkCyI81KaUuFhOfLstMQZDwErgSQR78d0A7OUoUk"
+VAPID_PRIVATE = "62w7j7S479UURp1ykUN3D87uLvI0z7OzXj5eXqwOAqM"
+VAPID_SUBJECT = "mailto:tuo@binance-bot-ftx6.onrender.com"
 
 def load_subs():
     try:
@@ -168,32 +169,29 @@ def kraken_fast_price_fallback():
         return out
     except: return {}
 
-def send_push_to_all(title, body, url="/app?v=76"):
+def send_push_to_all(title, body, url="/app?v=77"):
     subs = load_subs()
-    sent = 0
     if not subs:
-        return 0
+        return {"sent":0, "error":"nessun iscritto"}
     try:
-        from pywebpush import webpush, WebPushException
+        from pywebpush import webpush
+        sent=0; errors=[]
         for sub in subs:
             try:
-                webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": url}), vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUBJECT, "aud": "https://fcm.googleapis.com"})
+                webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": url}), vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUBJECT})
                 sent+=1
             except Exception as e:
-                # prova senza aud specifico
-                try:
-                    webpush(subscription_info=sub, data=json.dumps({"title": title, "body": body, "url": url}), vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUBJECT})
-                    sent+=1
-                except: pass
-    except ImportError:
-        # pywebpush non installato - simuliamo ok ma non invia davvero, logga
-        sent = len(subs)
-    return sent
+                errors.append(str(e)[:200])
+        return {"sent":sent, "errors": errors, "total": len(subs)}
+    except ImportError as e:
+        return {"sent":0, "error": f"pywebpush non installato: {e} - aggiungi pywebpush a requirements.txt", "total": len(subs)}
+    except Exception as e:
+        return {"sent":0, "error": str(e)[:500], "total": len(subs)}
 
 @app.route("/api/ping")
 def ping(): 
     subs = load_subs()
-    return jsonify({"ok":True,"msg":"V7.6 PUSH AUTO","time":rome_now().isoformat(),"subs": len(subs)})
+    return jsonify({"ok":True,"msg":"V7.7 PUSH FIX VERE CHIAVI","time":rome_now().isoformat(),"subs": len(subs), "vapid_pub": VAPID_PUBLIC[:20]+"..."})
 
 @app.route("/api/signals")
 def signals():
@@ -209,7 +207,7 @@ def signals():
             computed = compute_from_ohlc(ohlc, live_price=live, sens=sens)
             coins_data[coin] = {"symbol": f"{coin}USD","price": computed["price"],"rsi": computed["rsi"],"signal": computed["signal"],"conf": computed["conf"],"trend": computed["trend"],"tf": tf,"ema50": computed["ema50"],"ema200": computed["ema200"],"bb_up": computed["bb_up"],"bb_low": computed["bb_low"],"macd": computed["macd"],"macd_signal": computed["macd_signal"],"vol_ratio": computed["vol_ratio"],"adx": computed["adx"],"atr": computed["atr"],"sl": computed["sl"],"tp": computed["tp"],"reasons": computed["reasons"],"bullish": computed["bullish"],"bearish": computed["bearish"]}
         else:
-            price = live if live else (64800 if coin=="BTC" else 1910 if coin=="ETH" else 4345)
+            price = live if live else (63669 if coin=="BTC" else 1881 if coin=="ETH" else 4382)
             coins_data[coin] = {"symbol": f"{coin}USD","price": price,"rsi": 50.0,"signal": "FERMO","conf": 50,"trend": "Caricamento","tf": tf,"ema50": price*0.99,"ema200": price*0.98,"bb_up": price*1.02,"bb_low": price*0.98,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": price*0.02,"sl": price*0.99,"tp": price*1.01,"reasons": ["OHLC in caricamento..."],"bullish": 50,"bearish": 50}
     max_conf=0; globale="FERMO"
     for v in coins_data.values():
@@ -218,7 +216,7 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} SCALPER {sens}% TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} FIX PUSH TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
 
 @app.route("/api/history")
 def history():
@@ -242,7 +240,6 @@ def sub():
     try:
         data = request.get_json(force=True)
         subs = load_subs()
-        # evita duplicati per endpoint
         ep = data.get("endpoint","")
         subs = [s for s in subs if s.get("endpoint")!=ep]
         subs.append(data)
@@ -251,26 +248,27 @@ def sub():
     except Exception as e:
         return jsonify({"ok":False,"error": str(e)}), 500
 
+@app.route("/api/push/clear", methods=["POST"])
+def clear_subs():
+    save_subs([])
+    if os.path.exists(LAST_SIGNALS_FILE):
+        try: os.remove(LAST_SIGNALS_FILE)
+        except: pass
+    return jsonify({"ok":True,"total":0, "msg":"Reset fatto - ora rifai Push ALL una sola volta"})
+
 @app.route("/api/push/test", methods=["POST"])
 def testp():
     subs = load_subs()
-    try:
-        j = request.get_json(silent=True) or {}
-        coin = j.get("coin","BTC")
-        tf = j.get("tf","5m")
-        title = f"🔔 Test {coin} {tf}"
-        body = f"Notifiche ATTIVE! Se leggi questo, ti arriveranno i segnali >55% su Roma {rome_now().strftime('%H:%M')}"
-        sent = send_push_to_all(title, body)
-        # se pywebpush non c'è, manda fallback ok
-        if sent==0 and len(subs)>0:
-            sent = len(subs)
-        return jsonify({"ok":True,"sent_to":sent,"subs":len(subs)})
-    except Exception as e:
-        return jsonify({"ok":False,"error": str(e), "subs": len(subs)})
+    j = request.get_json(silent=True) or {}
+    coin = j.get("coin","BTC")
+    tf = j.get("tf","5m")
+    title = f"🔔 Test {coin} {tf} FIX"
+    body = f"Se leggi questo, le PUSH FUNZIONANO! Roma {rome_now().strftime('%H:%M')} - {len(subs)} iscritti"
+    result = send_push_to_all(title, body)
+    return jsonify({"ok": True, "result": result, "subs": len(subs), "time": rome_now().isoformat()})
 
 @app.route("/api/cron/check", methods=["GET","POST"])
 def cron_check():
-    # Chiamato ogni 5 min da UptimeRobot o da Render Cron
     sens = int(request.args.get("sens","55"))
     live = binance_fast_price()
     if not live: live = kraken_fast_price_fallback()
@@ -283,16 +281,19 @@ def cron_check():
             comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
             if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
                 key = f"{coin}_{tf}_{comp['signal']}"
-                if last.get(key) != comp["conf"]: # nuovo o cambiato
+                if last.get(key) != comp["conf"]:
                     new_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"price": comp["price"]})
                     last[key]=comp["conf"]
     save_last(last)
     sent_total = 0
+    results=[]
     for sig in new_signals:
         title = f"{'🟢' if sig['signal']=='COMPRA' else '🔴'} {sig['coin']} {sig['signal']} {sig['conf']}% {sig['tf']}"
-        body = f"{sig['coin']} a ${sig['price']:.2f} - RSI vero - Roma {rome_now().strftime('%H:%M')} - TAP per aprire"
-        sent_total += send_push_to_all(title, body, url=f"/app?v=76&tf={sig['tf']}&coin={sig['coin']}")
-    return jsonify({"ok": True, "checked": True, "new_signals": new_signals, "sent": sent_total, "subs": len(load_subs()), "time": rome_now().isoformat()})
+        body = f"{sig['coin']} a ${sig['price']:.2f} - Roma {rome_now().strftime('%H:%M')} - TAP per aprire"
+        r = send_push_to_all(title, body, url=f"/app?v=77&tf={sig['tf']}&coin={sig['coin']}")
+        results.append(r)
+        sent_total+=r.get("sent",0)
+    return jsonify({"ok": True, "checked": True, "new_signals": new_signals, "sent": sent_total, "results": results, "subs": len(load_subs()), "time": rome_now().isoformat()})
 
 @app.route("/sw.js")
 def sw():
@@ -300,19 +301,19 @@ def sw():
 self.addEventListener('push', function(e) {{
   let data = {{}};
   try {{ data = e.data.json(); }} catch {{ data = {{title: 'Vendi PRO', body: e.data.text()}} }}
-  const title = data.title || 'Vendi PRO V7.6';
+  const title = data.title || 'Vendi PRO V7.7';
   const options = {{
     body: data.body || 'Nuovo segnale!',
     icon: 'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',
     badge: 'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',
-    data: {{url: data.url || '/app?v=76'}},
+    data: {{url: data.url || '/app?v=77'}},
     vibrate: [200,100,200]
   }};
   e.waitUntil(self.registration.showNotification(title, options));
 }});
 self.addEventListener('notificationclick', function(e) {{
   e.notification.close();
-  const url = e.notification.data.url || '/app?v=76';
+  const url = e.notification.data.url || '/app?v=77';
   e.waitUntil(clients.openWindow(url));
 }});
 """, mimetype="application/javascript")
@@ -320,40 +321,40 @@ self.addEventListener('notificationclick', function(e) {{
 @app.route("/")
 @app.route("/app")
 def app_page():
-    return """
+    return f"""
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Vendi PRO V7.6 PUSH AUTO</title>
+<title>Vendi PRO V7.7 PUSH FIX</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-*{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}
-body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
-.header{background:linear-gradient(135deg,#0f172a 0%,#f59e0b 100%);border-radius:20px;padding:16px;color:white;display:flex;justify-content:space-between;align-items:center}
-.logo{width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800}
-.tfs{display:flex;gap:5px;margin:10px 0;overflow-x:auto}
-.tfs button{border:none;background:white;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-.tfs button.active{background:#0f172a;color:white}
-.sens{display:flex;gap:6px;margin:8px 0}
-.sens button{border:1px solid #e2e8f0;background:white;padding:6px 10px;border-radius:999px;font-weight:700;font-size:11px}
-.sens button.active{background:#f59e0b;color:white;border-color:#f59e0b}
-.coin-card{background:white;border-radius:18px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:10px}
-.coin-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f8fafc;cursor:pointer}
-.coin-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:13px}
-.btc{background:linear-gradient(135deg,#f59e0b,#f97316)}.eth{background:linear-gradient(135deg,#6366f1,#8b5cf6)}.oro{background:linear-gradient(135deg,#eab308,#ca8a04)}
-.badge{padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}
-.FERMO-bg{background:#fef3c7;color:#92400e}.COMPRA-bg{background:#dcfce7;color:#166534}.VENDI-bg{background:#fee2e2;color:#991b1b}
-.fab{position:fixed;bottom:16px;left:12px;right:12px;display:flex;gap:8px;z-index:20}
-.fab button{flex:1;padding:11px;border-radius:14px;border:none;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:12px}
-.btn-dark{background:#0f172a;color:white}.btn-light{background:white;color:#0f172a;border:1px solid #e2e8f0!important}
-#modal{position:fixed;inset:0;background:rgba(15,23,42,.7);backdrop-filter:blur(10px);display:none;align-items:end;justify-content:center;z-index:50;padding:10px}
-#modal.show{display:flex}
-.modal-box{background:white;width:100%;max-width:520px;border-radius:20px;padding:16px;max-height:90vh;overflow:auto}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
-.reason{display:inline-block;background:#f1f5f9;padding:3px 6px;border-radius:6px;font-size:9px;margin:2px}
-.hist-item{display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #f1f5f9;font-size:12px}
-.empty-hist{padding:16px;text-align:center;color:#64748b;font-size:12px}
+*{{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}}
+body{{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}}
+.header{{background:linear-gradient(135deg,#0f172a 0%,#22c55e 100%);border-radius:20px;padding:16px;color:white;display:flex;justify-content:space-between;align-items:center}}
+.logo{{width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800}}
+.tfs{{display:flex;gap:5px;margin:10px 0;overflow-x:auto}}
+.tfs button{{border:none;background:white;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.06)}}
+.tfs button.active{{background:#0f172a;color:white}}
+.sens{{display:flex;gap:6px;margin:8px 0}}
+.sens button{{border:1px solid #e2e8f0;background:white;padding:6px 10px;border-radius:999px;font-weight:700;font-size:11px}}
+.sens button.active{{background:#22c55e;color:white;border-color:#22c55e}}
+.coin-card{{background:white;border-radius:18px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:10px}}
+.coin-row{{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f8fafc;cursor:pointer}}
+.coin-icon{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:13px}}
+.btc{{background:linear-gradient(135deg,#f59e0b,#f97316)}}.eth{{background:linear-gradient(135deg,#6366f1,#8b5cf6)}}.oro{{background:linear-gradient(135deg,#eab308,#ca8a04)}}
+.badge{{padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}}
+.FERMO-bg{{background:#fef3c7;color:#92400e}}.COMPRA-bg{{background:#dcfce7;color:#166534}}.VENDI-bg{{background:#fee2e2;color:#991b1b}}
+.fab{{position:fixed;bottom:16px;left:12px;right:12px;display:flex;gap:6px;z-index:20}}
+.fab button{{flex:1;padding:10px;border-radius:14px;border:none;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:11px}}
+.btn-dark{{background:#0f172a;color:white}}.btn-light{{background:white;color:#0f172a;border:1px solid #e2e8f0!important}}.btn-red{{background:#fee2e2;color:#991b1b;border:1px solid #fecaca!important}}
+#modal{{position:fixed;inset:0;background:rgba(15,23,42,.7);backdrop-filter:blur(10px);display:none;align-items:end;justify-content:center;z-index:50;padding:10px}}
+#modal.show{{display:flex}}
+.modal-box{{background:white;width:100%;max-width:520px;border-radius:20px;padding:16px;max-height:90vh;overflow:auto}}
+.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}}
+.reason{{display:inline-block;background:#f1f5f9;padding:3px 6px;border-radius:6px;font-size:9px;margin:2px}}
+.hist-item{{display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #f1f5f9;font-size:12px}}
+.empty-hist{{padding:16px;text-align:center;color:#64748b;font-size:12px}}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">🔔</div><div><b>Vendi PRO V7.6 PUSH AUTO</b><br><small>Notifiche COMPRA/VENDI automatiche</small><br><small id=subStatus>Push: verifica...</small></div></div><div>⚡</div></div>
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">✅</div><div><b>Vendi PRO V7.7 PUSH FIX</b><br><small>Notifiche VERAMENTE funzionanti</small><br><small id=subStatus>Push: verifica...</small></div></div><div>🔔</div></div>
 <div class="tfs">
 <button onclick="loadTF('5m')" id=b5m class=active>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
@@ -366,11 +367,11 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 <button onclick="setSens(60)" id=s60>PRO 60%</button>
 <button onclick="setSens(65)" id=s65>ULTRA 65%</button>
 </div>
-<div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#f59e0b;font-size:10px"></small></div></div></div>
-<div class="coin-card" id=coins>Caricamento PUSH AUTO...</div>
-<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >55% TUTTI TF</b><br><small style="color:#64748b" id=histSub>Con PUSH - TAP per aprire</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
-<div class="coin-card" style="padding:12px;margin-top:12px;background:#fffbeb;border:1px solid #fde68a"><b>🔔 Come attivare le notifiche automatiche</b><br><small style="color:#92400e">1. Clicca Push ALL e dai permesso<br>2. Su iPhone: Condividi → Aggiungi a Home<br>3. Le notifiche arrivano anche a telefono bloccato quando c'è COMPRA/VENDI >55%<br>4. Per testare: clicca Test</small><br><small id=cronInfo style="color:#64748b"></small></div>
-<div class="fab"><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-dark" onclick="subscribePush()">📢 Push ALL</button></div>
+<div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#22c55e;font-size:10px"></small></div></div></div>
+<div class="coin-card" id=coins>Caricamento PUSH FIX...</div>
+<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL >55%</b><br><small style="color:#64748b" id=histSub>PUSH FIX - TAP</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
+<div class="coin-card" style="padding:12px;margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0"><b>✅ FIX NOTIFICHE - LEGGI QUI</b><br><small style="color:#166534">1. Clicca 🗑️ Azzera per pulire i 3 vecchi<br>2. Poi clicca Push ALL UNA volta sola<br>3. Dai permesso notifiche<br>4. Clicca Test - ora DEVE arrivare!<br>Se non arriva: Chrome > Impostazioni > Notifiche > Consenti questo sito</small><br><small id=cronInfo style="color:#64748b"></small><br><small id=debugInfo style="color:#dc2626;font-size:10px"></small></div>
+<div class="fab"><button class="btn-red" onclick="clearSubs()">🗑️ Azzera</button><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-dark" onclick="subscribePush()">📢 Push ALL</button></div>
 <div id=modal><div class="modal-box">
 <div style="display:flex;justify-content:space-between"><b id=mCoin>BTC</b><span onclick="closeModal()" style="cursor:pointer">✕</span></div>
 <small id=mPrice style="color:#64748b"></small>
@@ -393,74 +394,89 @@ body{background:#f8fafc;min-height:100vh;padding:12px 12px 110px}
 </div></div>
 <script>
 let curTF='5m', curSens=55, lastData=null, currentDetail=null;
-const VAPID_PUBLIC_KEY="BHWs4iOkU3pKk6E46BXj3iL6jopscCgpcQcH6i8xDCYhbFUAT8pwvGxMGhl3v9T7TChtOVpaAF48t8cWFaWtimQ";
-function urlBase64ToUint8Array(b64){const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
-async function subscribePush(){
-  try{
-    const reg=await navigator.serviceWorker.register('/sw.js');
-    let ex=await reg.pushManager.getSubscription(); if(ex){try{await ex.unsubscribe();}catch{}}
-    const perm=await Notification.requestPermission(); 
-    if(perm!=='granted'){alert('Permesso negato - vai in Impostazioni > Notifiche');return;}
-    const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
-    const res=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
-    const j=await res.json();
-    document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total+' dispositivi';
-    alert('✅ Notifiche ATTIVE! Ora ti arrivano COMPRA/VENDI anche a telefono bloccato');
-  }catch(e){alert('Errore push: '+e.message+' - Su iPhone devi aggiungere a Home');}
-}
-async function testPush(){
-  try{
-    const r=await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({coin:'BTC',tf:curTF})});
+const VAPID_PUBLIC_KEY="{VAPID_PUBLIC}";
+function urlBase64ToUint8Array(b64){{const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}}
+async function clearSubs(){{
+  try{{
+    const r=await fetch('/api/push/clear',{{method:'POST'}});
     const j=await r.json();
-    alert('Test inviato a '+j.sent_to+' dispositivi (tot subs: '+j.subs+') - Se non arriva, controlla permessi notifiche');
-  }catch(e){alert(e.message);}
-}
-function colorFor(s){return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}
-function bgFor(s){return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}
-function setSens(v){
+    document.getElementById('subStatus').innerText='Push: AZZERATO - rifai Push ALL';
+    document.getElementById('cronInfo').innerText='Reset: '+j.msg;
+    alert('✅ Azzerato! Ora clicca Push ALL UNA volta sola e poi Test');
+  }}catch(e){{alert(e.message);}}
+}}
+async function subscribePush(){{
+  try{{
+    if(!('serviceWorker' in navigator)){{alert('Service Worker non supportato');return;}}
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    await new Promise(r=>setTimeout(r,500));
+    let ex=await reg.pushManager.getSubscription(); if(ex){{try{{await ex.unsubscribe();}}catch{{}}}}
+    const perm=await Notification.requestPermission(); 
+    if(perm!=='granted'){{alert('Permesso negato - Chrome > 3 puntini > Impostazioni > Notifiche > Consenti');return;}}
+    const sub=await reg.pushManager.subscribe({{userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}});
+    const res=await fetch('/api/push/subscribe',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(sub)}});
+    const j=await res.json();
+    document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total+' dispositivo (UNICO)';
+    alert('✅ Iscritto! Ora clicca Test per provare');
+  }}catch(e){{document.getElementById('debugInfo').innerText='Err subscribe: '+e.message; alert('Errore: '+e.message);}}
+}}
+async function testPush(){{
+  try{{
+    document.getElementById('debugInfo').innerText='Invio test...';
+    const r=await fetch('/api/push/test',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{coin:'BTC',tf:curTF}})}});
+    const j=await r.json();
+    document.getElementById('cronInfo').innerText='Test result: '+JSON.stringify(j.result).slice(0,300);
+    document.getElementById('debugInfo').innerText='Sent:'+j.result.sent+' Total:'+j.subs+' Errors:'+(j.result.errors||[]).join(' ').slice(0,200);
+    if(j.result.sent>0){{alert('✅ Test inviato a '+j.result.sent+' dispositivi! Guarda le notifiche del telefono (tira giù la tendina)');}}
+    else{{alert('❌ Test non inviato: '+(j.result.error||'nessun iscritto')+' - Rifai Push ALL');}}
+  }}catch(e){{document.getElementById('debugInfo').innerText='Err test: '+e.message; alert(e.message);}}
+}}
+function colorFor(s){{return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}}
+function bgFor(s){{return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}}
+function setSens(v){{
   curSens=v;
   document.querySelectorAll('.sens button').forEach(b=>b.classList.remove('active'));
   document.getElementById('s'+v).classList.add('active');
-  document.getElementById('histSub').innerText='Soglia '+v+'% con PUSH - TAP per aprire';
+  document.getElementById('histSub').innerText='Soglia '+v+'% FIX - TAP';
   loadTF(curTF);
-}
-async function loadTF(tf){
+}}
+async function loadTF(tf){{
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico PUSH AUTO '+curSens+'% '+tf+'...</div>';
-  try{
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ Carico FIX '+curSens+'% '+tf+'...</div>';
+  try{{
     const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens); const d=await res.json(); lastData=d;
     document.getElementById('globale').innerText=d.globale||'...'; document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • PUSH '+curSens+'%'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
+    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • FIX '+curSens+'%'; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
     let html='';
-    for(let [name,info] of Object.entries(d.coins)){
+    for(let [name,info] of Object.entries(d.coins)){{
       const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro'; const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
-      html+=`<div class=coin-row onclick="openDetails('${name}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${icon}">${ico}</div><div><b>${name} <span style="font-size:9px;color:#64748b">ADX ${info.adx.toFixed(0)}</span></b><div style="font-size:10px;color:#64748b">RSI ${info.rsi.toFixed(1)} • ${info.trend} • TF ${tf}</div><div style="font-size:9px;color:#94a3b8">${info.reasons.slice(0,2).join(' • ')}</div></div></div><div style="text-align:right"><span class="badge ${bgFor(info.signal)}">${info.signal} ${info.conf}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${info.price.toFixed(2)}</div><div style="font-size:9px;color:#94a3b8">TAP dettagli</div></div></div>`;
-    }
+      html+=`<div class=coin-row onclick="openDetails('${{name}}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${{icon}}">${{ico}}</div><div><b>${{name}} <span style="font-size:9px;color:#64748b">ADX ${{info.adx.toFixed(0)}}</span></b><div style="font-size:10px;color:#64748b">RSI ${{info.rsi.toFixed(1)}} • ${{info.trend}} • TF ${{tf}}</div><div style="font-size:9px;color:#94a3b8">${{info.reasons.slice(0,2).join(' • ')}}</div></div></div><div style="text-align:right"><span class="badge ${{bgFor(info.signal)}}">${{info.signal}} ${{info.conf}}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${{info.price.toFixed(2)}}</div><div style="font-size:9px;color:#94a3b8">TAP dettagli</div></div></div>`;
+    }}
     document.getElementById('coins').innerHTML=html;
     loadHistGlobal();
     checkCron();
-  }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore: '+e.message+'</div>';}
-}
-async function loadHistGlobal(){
-  try{
+  }}catch(e){{document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore: '+e.message+'</div>';}}
+}}
+async function loadHistGlobal(){{
+  try{{
     const r=await fetch('/api/history?sens='+curSens); const list=await r.json(); const c=document.getElementById('histList');
-    if(list.length===0){c.innerHTML='<div class=empty-hist>😴 Nessun segnale >'+curSens+'% ora<br><small>Quando scatta ti arriva PUSH</small></div>';}
-    else {c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${h.coin}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${h.signal=='COMPRA'?'#dcfce7':'#fee2e2'};color:${h.signal=='COMPRA'?'#16a34a':'#dc2626'}">${h.signal} ${h.conf}%</span> <small>${h.tf}</small> RSI ${h.rsi}</div><div style="text-align:right"><div>$${h.price.toFixed(0)}</div><div style="font-size:9px;color:#94a3b8">${h.time}</div></div></div>`).join('');}
-  }catch(e){document.getElementById('histList').innerHTML='<div class=empty-hist>Errore storico</div>';}
-}
-async function checkCron(){
-  try{
+    if(list.length===0){{c.innerHTML='<div class=empty-hist>😴 Nessun segnale >'+curSens+'% ora</div>';}}
+    else {{c.innerHTML=list.map(h=>`<div class=hist-item><div><b>${{h.coin}}</b> <span style="padding:2px 5px;border-radius:999px;font-size:9px;font-weight:700;background:${{h.signal=='COMPRA'?'#dcfce7':'#fee2e2'}};color:${{h.signal=='COMPRA'?'#16a34a':'#dc2626'}}">${{h.signal}} ${{h.conf}}%</span> <small>${{h.tf}}</small> RSI ${{h.rsi}}</div><div style="text-align:right"><div>$${{h.price.toFixed(0)}}</div><div style="font-size:9px;color:#94a3b8">${{h.time}}</div></div></div>`).join('');}}
+  }}catch(e){{document.getElementById('histList').innerHTML='<div class=empty-hist>Errore storico</div>';}}
+}}
+async function checkCron(){{
+  try{{
     const r=await fetch('/api/cron/check?sens='+curSens);
     const j=await r.json();
-    document.getElementById('cronInfo').innerText=`Cron: ${j.new_signals.length} nuovi segnali, ${j.sent} push inviate, ${j.subs} iscritti - ${j.time}`;
-  }catch(e){}
-}
-function toggleHist(){const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'||l.style.display==''){l.style.display='block';a.innerText='▲';loadHistGlobal();}else{l.style.display='none';a.innerText='▼';}}
-function openDetails(coin){
-  try{
+    document.getElementById('cronInfo').innerText=`Cron: ${{j.new_signals.length}} nuovi, ${{j.sent}} push inviate, ${{j.subs}} iscritti - ${{j.time}}`;
+  }}catch(e){{}}
+}}
+function toggleHist(){{const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'||l.style.display==''){{l.style.display='block';a.innerText='▲';loadHistGlobal();}}else{{l.style.display='none';a.innerText='▼';}}}}
+function openDetails(coin){{
+  try{{
     if(!lastData) return; const info=lastData.coins[coin]; if(!info) return; currentDetail=coin;
-    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' PUSH';
+    document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' FIX';
     document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' • '+info.trend;
     document.getElementById('mSignal').innerText=info.signal; document.getElementById('mSignal').style.color=colorFor(info.signal);
     document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%';
@@ -473,14 +489,14 @@ function openDetails(coin){
     document.getElementById('mEntry').innerText='$'+info.price.toFixed(2);
     document.getElementById('mSL').innerText=info.sl?'$'+info.sl.toFixed(2):'-';
     document.getElementById('mTP').innerText=info.tp?'$'+info.tp.toFixed(2):'-';
-    document.getElementById('mReasons').innerHTML=info.reasons.map(r=>`<span class=reason>${r}</span>`).join(' ');
+    document.getElementById('mReasons').innerHTML=info.reasons.map(r=>`<span class=reason>${{r}}</span>`).join(' ');
     document.getElementById('modal').classList.add('show');
-  }catch(e){alert('Errore: '+e.message);}
-}
-function closeModal(){document.getElementById('modal').classList.remove('show')}
-function openChart(){if(!currentDetail)return;const map={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}
+  }}catch(e){{alert('Errore: '+e.message);}}
+}}
+function closeModal(){{document.getElementById('modal').classList.remove('show')}}
+function openChart(){{if(!currentDetail)return;const map={{BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}}
 loadTF('5m'); setInterval(()=>loadTF(curTF),30000);
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').then(()=>{fetch('/api/ping').then(r=>r.json()).then(j=>{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - '+j.time})});}
+if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').then(()=>{{fetch('/api/ping').then(r=>r.json()).then(j=>{{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - FIX V7.7 - '+j.time.slice(11,16)}})}});}}
 </script>
 </body></html>
 """
