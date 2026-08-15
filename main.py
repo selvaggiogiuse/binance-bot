@@ -8,19 +8,15 @@ try:
 except:
     def rome_now():
         return datetime.now(timezone.utc) + timedelta(hours=2)
-
 app = Flask(__name__)
-OHLC_CACHE = {}
-CACHE_TTL = 45
+OHLC_CACHE = {}; CACHE_TTL = 45
 PAIRS_KRAKEN = {"BTC": "XBTUSD","ETH": "ETHUSD","ORO": "PAXGUSD"}
 PAIRS_BINANCE = {"BTC": "BTCUSDT","ETH": "ETHUSDT","ORO": "PAXGUSDT"}
 TF_MAP = {"5m": 5,"15m": 15,"1H": 60,"4H": 240,"1D": 1440}
-SUBS_FILE = "/tmp/subs.json"
-LAST_SIGNALS_FILE = "/tmp/last_signals.json"
+SUBS_FILE = "/tmp/subs.json"; LAST_SIGNALS_FILE = "/tmp/last_signals.json"
 VAPID_PUBLIC = "BCOxkGJ3MRDgLq_3IquF1JxqyP1YbeC66cljBJvfHHB5419NkCyI81KaUuFhOfLstMQZDwErgSQR78d0A7OUoUk"
 VAPID_PRIVATE = "62w7j7S479UURp1ykUN3D87uLvI0z7OzXj5eXqwOAqM"
 VAPID_SUBJECT = "mailto:tuo@binance-bot-ftx6.onrender.com"
-
 def load_subs():
     try:
         if os.path.exists(SUBS_FILE):
@@ -41,7 +37,6 @@ def save_last(d):
     try:
         with open(LAST_SIGNALS_FILE,"w") as f: json.dump(d,f)
     except: pass
-
 def ema_calc(data, period):
     if len(data) < period: period = len(data) or 1
     k = 2 / (period + 1); ema = data[0]
@@ -159,7 +154,7 @@ def kraken_fast_price_fallback():
             elif "PAXG" in k: out["ORO"]=p
         return out
     except: return {}
-def send_push_to_all(title, body, url="/app?v=81"):
+def send_push_to_all(title, body, url="/app?v=82"):
     subs = load_subs()
     if not subs: return {"sent":0}
     try:
@@ -172,9 +167,8 @@ def send_push_to_all(title, body, url="/app?v=81"):
             except: pass
         return {"sent":sent, "total": len(subs)}
     except: return {"sent":0}
-
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V8.1 PAPER CLOSE","time":rome_now().isoformat(),"subs": len(load_subs())})
+def ping(): return jsonify({"ok":True,"msg":"V8.2 WINRATE FIX","time":rome_now().isoformat(),"subs": len(load_subs())})
 @app.route("/api/signals")
 def signals():
     tf = request.args.get("tf","5m"); sens = int(request.args.get("sens","55"))
@@ -188,7 +182,7 @@ def signals():
             computed = compute_from_ohlc(ohlc, live_price=live, sens=sens)
             coins_data[coin] = {"symbol": f"{coin}USD","price": computed["price"],"rsi": computed["rsi"],"signal": computed["signal"],"conf": computed["conf"],"trend": computed["trend"],"tf": tf,"ema50": computed["ema50"],"ema200": computed["ema200"],"bb_up": computed["bb_up"],"bb_low": computed["bb_low"],"macd": computed["macd"],"macd_signal": computed["macd_signal"],"vol_ratio": computed["vol_ratio"],"adx": computed["adx"],"atr": computed["atr"],"sl": computed["sl"],"tp": computed["tp"],"reasons": computed["reasons"],"bullish": computed["bullish"],"bearish": computed["bearish"]}
         else:
-            price = live if live else (63090 if coin=="BTC" else 1881 if coin=="ETH" else 4382)
+            price = live if live else (4374 if coin=="ORO" else 63090)
             coins_data[coin] = {"symbol": f"{coin}USD","price": price,"rsi": 50.0,"signal": "FERMO","conf": 50,"trend": "Caricamento","tf": tf,"ema50": price*0.99,"ema200": price*0.98,"bb_up": price*1.02,"bb_low": price*0.98,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": price*0.02,"sl": price*0.99,"tp": price*1.01,"reasons": ["OHLC in caricamento..."],"bullish": 50,"bearish": 50}
     max_conf=0; globale="FERMO"
     for v in coins_data.values():
@@ -197,7 +191,43 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} V8.1 TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} V8.2 TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
+@app.route("/api/backtest")
+def backtest():
+    coin = request.args.get("coin","BTC"); tf = request.args.get("tf","4H"); sens = int(request.args.get("sens","55"))
+    ohlc = get_ohlc(coin, tf)
+    if not ohlc or len(ohlc) < 80: return jsonify({"ok":True, "total_signals":0, "wins":0, "win_rate":0, "last20_win":0, "last20":[]})
+    results=[]; wins=0; total=0
+    # più permissivo: conta anche se conf >= 50 per FERMO, ma per winrate solo COMPRA/VENDI
+    for i in range(60, len(ohlc)-3):
+        slice_ohlc = ohlc[:i+1]
+        comp = compute_from_ohlc(slice_ohlc, sens=sens)
+        if comp["signal"] not in ("COMPRA","VENDI"): continue
+        if comp["conf"] < 50: continue
+        entry = float(ohlc[i][4])
+        # guarda 3 candele avanti per capire se avrebbe vinto
+        future_close = float(ohlc[i+3][4]) if i+3 < len(ohlc) else float(ohlc[i+1][4])
+        win = (future_close > entry) if comp["signal"]=="COMPRA" else (future_close < entry)
+        total+=1
+        if win: wins+=1
+        results.append({"entry": entry, "future": future_close, "signal": comp["signal"], "win": win, "conf": comp["conf"], "time": i})
+    last20 = results[-20:] if len(results)>=20 else results
+    win_rate = (wins/total*100) if total else 0
+    last20_win = (sum(1 for r in last20 if r["win"])/len(last20)*100) if last20 else 0
+    return jsonify({"ok":True, "coin":coin, "tf":tf, "sens":sens, "total_signals": total, "wins": wins, "win_rate": round(win_rate,1), "last20_win": round(last20_win,1), "last20": last20[::-1][:12]})
+
+@app.route("/api/chart")
+def chart_data():
+    coin = request.args.get("coin","BTC"); tf = request.args.get("tf","4H")
+    ohlc = get_ohlc(coin, tf)
+    if not ohlc: return jsonify({"ok":False})
+    data=[]
+    for c in ohlc[-120:]:
+        data.append({"time": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4])})
+    live = binance_fast_price()
+    if live.get(coin) and data:
+        data[-1]["close"] = live[coin]
+    return jsonify({"ok":True, "data": data})
 @app.route("/api/history")
 def history():
     sens = int(request.args.get("sens","55")); live = binance_fast_price()
@@ -212,38 +242,6 @@ def history():
                 all_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],"time": f"{tf} • {rome_now().strftime('%H:%M')}","adx": comp["adx"],"reasons": comp["reasons"]})
     all_signals.sort(key=lambda x: x["conf"], reverse=True)
     return jsonify(all_signals[:20])
-@app.route("/api/backtest")
-def backtest():
-    coin = request.args.get("coin","BTC"); tf = request.args.get("tf","5m"); sens = int(request.args.get("sens","55"))
-    ohlc = get_ohlc(coin, tf)
-    if not ohlc or len(ohlc) < 100: return jsonify({"ok":False})
-    results=[]; wins=0; total=0
-    for i in range(50, len(ohlc)-2):
-        slice_ohlc = ohlc[:i+1]
-        comp = compute_from_ohlc(slice_ohlc, sens=sens)
-        if comp["signal"] not in ("COMPRA","VENDI"): continue
-        if comp["conf"] < sens: continue
-        entry = float(ohlc[i][4]); next_next = float(ohlc[i+2][4]) if i+2 < len(ohlc) else float(ohlc[i+1][4])
-        win = (next_next > entry) if comp["signal"]=="COMPRA" else (next_next < entry)
-        total+=1
-        if win: wins+=1
-        results.append({"entry": entry, "signal": comp["signal"], "win": win, "conf": comp["conf"]})
-    last20 = results[-20:] if len(results)>=20 else results
-    win_rate = (wins/total*100) if total else 0
-    last20_win = (sum(1 for r in last20 if r["win"])/len(last20)*100) if last20 else 0
-    return jsonify({"ok":True, "total_signals": total, "wins": wins, "win_rate": round(win_rate,1), "last20_win": round(last20_win,1), "last20": last20[::-1][:10]})
-@app.route("/api/chart")
-def chart_data():
-    coin = request.args.get("coin","BTC"); tf = request.args.get("tf","5m")
-    ohlc = get_ohlc(coin, tf)
-    if not ohlc: return jsonify({"ok":False})
-    data=[]
-    for c in ohlc[-100:]:
-        data.append({"time": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4])})
-    live = binance_fast_price()
-    if live.get(coin) and data:
-        data[-1]["close"] = live[coin]
-    return jsonify({"ok":True, "data": data})
 @app.route("/api/push/subscribe", methods=["POST"])
 def sub():
     try:
@@ -259,7 +257,7 @@ def clear_subs():
 @app.route("/api/push/test", methods=["POST"])
 def testp():
     subs = load_subs()
-    result = send_push_to_all(f"🔔 Test V8.1", f"PUSH OK {len(subs)} iscritti")
+    result = send_push_to_all(f"🔔 Test V8.2", f"PUSH OK {len(subs)}")
     return jsonify({"ok": True, "result": result, "subs": len(subs)})
 @app.route("/api/cron/check", methods=["GET","POST"])
 def cron_check():
@@ -278,18 +276,18 @@ def cron_check():
                     last[key]=comp["conf"]
     save_last(last); sent_total=0
     for sig in new_signals:
-        r = send_push_to_all(f"{'🟢' if sig['signal']=='COMPRA' else '🔴'} {sig['coin']} {sig['signal']} {sig['conf']}%", f"${sig['price']:.2f} Roma {rome_now().strftime('%H:%M')}", url=f"/app?v=81&tf={sig['tf']}")
+        r = send_push_to_all(f"{'🟢' if sig['signal']=='COMPRA' else '🔴'} {sig['coin']} {sig['signal']} {sig['conf']}%", f"${sig['price']:.2f}", url=f"/app?v=82&tf={sig['tf']}")
         sent_total+=r.get("sent",0)
-    return jsonify({"ok": True, "new_signals": new_signals, "sent": sent_total, "subs": len(load_subs()), "time": rome_now().isoformat()})
+    return jsonify({"ok": True, "new_signals": new_signals, "sent": sent_total, "subs": len(load_subs())})
 @app.route("/sw.js")
 def sw():
-    return Response("self.addEventListener('push',function(e){let d={};try{d=e.data.json()}catch{d={title:'Vendi PRO',body:e.data.text()}}const t=d.title||'Vendi PRO V8.1';const o={body:d.body||'Segnale!',icon:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',badge:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',data:{url:d.url||'/app?v=81'},vibrate:[200,100,200]};e.waitUntil(self.registration.showNotification(t,o))});self.addEventListener('notificationclick',function(e){e.notification.close();e.waitUntil(clients.openWindow(e.notification.data.url||'/app?v=81'))});", mimetype="application/javascript")
+    return Response("self.addEventListener('push',function(e){let d={};try{d=e.data.json()}catch{d={title:'Vendi PRO',body:e.data.text()}}const t=d.title||'Vendi PRO V8.2';const o={body:d.body||'Segnale!',icon:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',badge:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',data:{url:d.url||'/app?v=82'},vibrate:[200,100,200]};e.waitUntil(self.registration.showNotification(t,o))});self.addEventListener('notificationclick',function(e){e.notification.close();e.waitUntil(clients.openWindow(e.notification.data.url||'/app?v=82'))});", mimetype="application/javascript")
 @app.route("/")
 @app.route("/app")
 def app_page():
     return f"""
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>V8.1 PAPER CLOSE</title>
+<title>V8.2 WINRATE FIX VISIBILE</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
@@ -319,25 +317,23 @@ body{{background:#f8fafc;min-height:100vh;padding:12px 12px 120px}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}}
 .reason{{display:inline-block;background:#f1f5f9;padding:3px 6px;border-radius:6px;font-size:9px;margin:2px}}
 .chart-wrap{{background:#0f172a;border-radius:12px;padding:8px;margin:8px 0}}
-.win-badge{{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:800;font-size:11px;margin-left:6px}}
-.win-high{{background:#dcfce7;color:#166534}}.win-mid{{background:#fef3c7;color:#92400e}}.win-low{{background:#fee2e2;color:#991b1b}}
+.win-badge{{display:inline-block;padding:5px 10px;border-radius:999px;font-weight:800;font-size:12px;margin-left:6px}}
+.win-high{{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}}.win-mid{{background:#fef3c7;color:#92400e}}.win-low{{background:#fee2e2;color:#991b1b}}
 .open-trade{{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:8px;margin:6px 0;font-size:11px;display:flex;justify-content:space-between;align-items:center}}
+.winrate-big{{background:linear-gradient(135deg,#eff6ff 0%,#dcfce7 100%);border:2px solid #3b82f6;border-radius:12px;padding:10px;margin:8px 0;text-align:center}}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">V8.1</div><div><b>Vendi PRO V8.1</b><br><small>Chiudi trade + P/L reale</small><br><small id=subStatus>Push: verifica...</small></div></div><div>💰</div></div>
-
+<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">V8.2</div><div><b>Vendi PRO V8.2</b><br><small>WINRATE SEMPRE VISIBILE</small><br><small id=subStatus>Push: verifica...</small></div></div><div>📊</div></div>
 <div class="paper-bar" id=paperBar>
-<div><b>💰 Paper Trading</b><br><span id=paperBalance>Saldo: €10.00</span><br><span id=paperPNL style="font-size:10px;color:#94a3b8">P/L: €0.00 (0 chiusi)</span></div>
+<div><b>💰 Paper Trading</b><br><span id=paperBalance>Saldo: €10.00</span><br><span id=paperPNL style="font-size:10px;color:#94a3b8">P/L: €0.00</span></div>
 <div style="text-align:right"><button onclick="resetPaper()" style="background:rgba(255,255,255,.15);border:none;color:white;padding:6px 10px;border-radius:8px;font-size:10px">Reset</button><div style="font-size:9px;color:#fbbf24" id=openCount>0 aperti</div></div>
 </div>
-
 <div id=openTradesList></div>
-
 <div class="tfs">
-<button onclick="loadTF('5m')" id=b5m class=active>5m ⚡</button>
+<button onclick="loadTF('5m')" id=b5m>5m ⚡</button>
 <button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
 <button onclick="loadTF('1H')" id=b1H>1H</button>
-<button onclick="loadTF('4H')" id=b4H>4H</button>
+<button onclick="loadTF('4H')" id=b4H class=active>4H</button>
 <button onclick="loadTF('1D')" id=b1D>1D</button>
 </div>
 <div class="sens">
@@ -346,16 +342,16 @@ body{{background:#f8fafc;min-height:100vh;padding:12px 12px 120px}}
 <button onclick="setSens(65)" id=s65>ULTRA 65%</button>
 </div>
 <div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#3b82f6;font-size:10px"></small></div></div></div>
-<div class="coin-card" id=coins>Caricamento V8.1...</div>
-
-<div class="coin-card" style="padding:12px;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleHist()"><div><b>📜 Storico REAL</b><br><small style="color:#64748b" id=histSub>TAP</small></div><div id=histArrow>▼</div></div><div id=histList style="display:none;margin-top:8px"></div></div>
-
-<div class="fab"><button class="btn-light" onclick="testPush()">🔔 Test</button><button class="btn-blue" onclick="subscribePush()">📢 Push</button><button class="btn-dark" onclick="document.getElementById('histList').style.display='block';document.getElementById('histList').innerHTML='<b>💰 Trade Aperti</b><br>'+renderOpenTradesFull()">💰 Chiudi</button></div>
+<div class="coin-card" id=coins>Caricamento V8.2...</div>
 
 <div id=modal><div class="modal-box">
-<div style="display:flex;justify-content:space-between;align-items:center"><div><b id=mCoin>BTC</b> <span id=mWinRate></span></div><span onclick="closeModal()" style="cursor:pointer;font-size:20px">✕</span></div>
+<div style="display:flex;justify-content:space-between;align-items:center"><div><b id=mCoin>ORO</b> <span id=mWinRate></span></div><span onclick="closeModal()" style="cursor:pointer;font-size:20px">✕</span></div>
 <small id=mPrice style="color:#64748b"></small>
-<div class="chart-wrap"><div id=chart style="height:180px"></div></div>
+
+<div id=mWinRateBig class="winrate-big" style="display:none"></div>
+
+<div class="chart-wrap"><div id=chart style="height:200px"></div></div>
+
 <div class="grid2" style="margin-top:8px">
 <div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>SEGNALE</small><div id=mSignal style="font-weight:800"></div></div>
 <div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>AFFID.</small><div id=mConf style="font-weight:800"></div></div>
@@ -371,131 +367,56 @@ body{{background:#f8fafc;min-height:100vh;padding:12px 12px 120px}}
 <div style="background:#f8fafc;padding:8px;border-radius:10px"><small>SL / TP</small><div style="font-size:11px"><span id=mSL></span> / <span id=mTP></span></div></div>
 </div>
 <div><small style="font-weight:700;font-size:11px">Perché:</small><div id=mReasons style="margin-top:4px"></div></div>
-<div id=mBacktest style="margin-top:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:8px;font-size:11px"></div>
+
 <div style="display:flex;gap:6px;margin-top:10px">
-<button onclick="paperTrade('buy')" style="flex:1;padding:10px;border-radius:10px;border:none;background:#dcfce7;color:#166534;font-weight:700">💰 Compra 1€</button>
-<button onclick="paperTrade('sell')" style="flex:1;padding:10px;border-radius:10px;border:none;background:#fee2e2;color:#991b1b;font-weight:700">💰 Vendi 1€</button>
+<button onclick="paperTrade('buy')" style="flex:1;padding:12px;border-radius:10px;border:none;background:#dcfce7;color:#166534;font-weight:700;font-size:13px">💰 Compra 1€</button>
+<button onclick="paperTrade('sell')" style="flex:1;padding:12px;border-radius:10px;border:none;background:#fee2e2;color:#991b1b;font-weight:700;font-size:13px">💰 Vendi 1€</button>
 </div>
 <button onclick="openChart()" style="margin-top:8px;width:100%;padding:9px;border-radius:10px;border:none;background:#0f172a;color:white;font-weight:700;font-size:12px">📈 TradingView</button>
 </div></div>
 
 <script>
-let curTF='5m', curSens=55, lastData=null, currentDetail=null;
+let curTF='4H', curSens=55, lastData=null, currentDetail=null;
 const VAPID_PUBLIC_KEY="{VAPID_PUBLIC}";
 function urlBase64ToUint8Array(b64){{const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}}
-
-function getPaper(){{
-  try{{ return JSON.parse(localStorage.getItem('paper_v81')||'{{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}'); }}catch{{ return {{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}; }}
-}}
-function savePaper(p){{ localStorage.setItem('paper_v81', JSON.stringify(p)); updatePaperBar(); renderOpen(); }}
-function updatePaperBar(){{
-  const p=getPaper();
-  document.getElementById('paperBalance').innerText='Saldo: €'+p.balance.toFixed(2);
-  document.getElementById('paperPNL').innerText=`P/L: €${{p.pnl.toFixed(4)}} (${{p.closed}} chiusi)`;
-  document.getElementById('openCount').innerText=p.open.length+' aperti';
-}}
-function resetPaper(){{
-  if(confirm('Azzerare tutto il paper trading?')){{ savePaper({{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}); }}
-}}
-function renderOpen(){{
-  const p=getPaper();
-  const cont=document.getElementById('openTradesList');
-  if(p.open.length===0){{ cont.innerHTML=''; return; }}
-  // prezzo attuale per calcolare P/L live
-  let html='';
-  p.open.forEach((t, idx)=>{{
-    let curPrice = lastData && lastData.coins[t.coin] ? lastData.coins[t.coin].price : t.entry;
-    let pnl = t.side==='COMPRA' ? (curPrice - t.entry)/t.entry * 1 : (t.entry - curPrice)/t.entry * 1;
-    let pnlColor = pnl>=0?'#16a34a':'#dc2626';
-    html+=`<div class="open-trade"><div><b>${{t.coin}} ${{t.side}}</b> 1€ @ $${{t.entry.toFixed(0)}}<br><small>${{t.tf}} ${{t.time}} • ora $${{curPrice.toFixed(0)}} • <span style="color:${{pnlColor}};font-weight:700">${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}</span></small></div><button onclick="closeTrade(${{idx}})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px;font-size:11px">Chiudi</button></div>`;
-  }});
-  cont.innerHTML=html;
-}}
-function renderOpenTradesFull(){{
-  const p=getPaper();
-  if(p.open.length===0) return '<small style="color:#64748b">Nessun trade aperto</small>';
-  return p.open.map((t,i)=>{{
-    let cur=lastData && lastData.coins[t.coin] ? lastData.coins[t.coin].price : t.entry;
-    let pnl = t.side==='COMPRA' ? (cur - t.entry)/t.entry : (t.entry - cur)/t.entry;
-    return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:6px;border-bottom:1px solid #f1f5f9"><span>${{t.coin}} ${{t.side}} $${{t.entry.toFixed(0)}} → $${{cur.toFixed(0)}} (${{pnl>=0?'+':''}}${{(pnl*100).toFixed(2)}}%)</span><button onclick="closeTrade(${{i}});toggleHist()" style="background:#0f172a;color:white;border:none;padding:4px 8px;border-radius:6px;font-size:10px">Chiudi</button></div>`;
-  }}).join('') + '<br><small>TAP fuori per chiudere</small>';
-}}
-function paperTrade(side){{
-  if(!currentDetail||!lastData) return;
-  const info=lastData.coins[currentDetail];
-  const p=getPaper();
-  if(p.balance < 1){{ alert('Saldo finito! Resetta paper trading'); return; }}
-  const trade={{id:Date.now(), coin:currentDetail, side: side==='buy'?'COMPRA':'VENDI', entry: info.price, time: new Date().toLocaleTimeString(), tf: curTF, conf: info.conf}};
-  p.open.push(trade);
-  p.trades.unshift(trade);
-  p.balance -= 1;
-  savePaper(p);
-  closeModal();
-  alert(`✅ Aperto ${{trade.side}} ${{currentDetail}} 1€ @ $${{info.price.toFixed(2)}}\\nOra puoi chiuderlo quando vuoi con "💰 Chiudi"`);
-}}
-function closeTrade(idx){{
-  const p=getPaper();
-  if(idx<0||idx>=p.open.length) return;
-  const t=p.open[idx];
-  let curPrice = lastData && lastData.coins[t.coin] ? lastData.coins[t.coin].price : t.entry;
-  let pnl = t.side==='COMPRA' ? (curPrice - t.entry)/t.entry * 1 : (t.entry - curPrice)/t.entry * 1;
-  // restituisci 1€ + pnl
-  p.balance += 1 + pnl;
-  p.pnl += pnl;
-  p.closed += 1;
-  p.open.splice(idx,1);
-  savePaper(p);
-  alert(`🔒 Chiuso ${{t.coin}} ${{t.side}}\\nEntry $${{t.entry.toFixed(2)}} → Exit $${{curPrice.toFixed(2)}}\\nP/L: ${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}`);
-}}
-
-async function subscribePush(){{
-  try{{
-    const reg=await navigator.serviceWorker.register('/sw.js');
-    await new Promise(r=>setTimeout(r,400));
-    let ex=await reg.pushManager.getSubscription(); if(ex){{try{{await ex.unsubscribe();}}catch{{}}}}
-    const perm=await Notification.requestPermission(); if(perm!=='granted'){{alert('Permesso negato');return;}}
-    const sub=await reg.pushManager.subscribe({{userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}});
-    const res=await fetch('/api/push/subscribe',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(sub)}});
-    const j=await res.json();
-    document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total;
-  }}catch(e){{alert(e.message);}}
-}}
-async function testPush(){{
-  const r=await fetch('/api/push/test',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{}})}});
-  const j=await r.json();
-  alert('Test a '+j.result.sent);
-}}
+function getPaper(){{try{{return JSON.parse(localStorage.getItem('paper_v82')||'{{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}')}}catch{{return {{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}}}}}
+function savePaper(p){{localStorage.setItem('paper_v82', JSON.stringify(p)); updatePaperBar(); renderOpen();}}
+function updatePaperBar(){{const p=getPaper();document.getElementById('paperBalance').innerText='Saldo: €'+p.balance.toFixed(2);document.getElementById('paperPNL').innerText=`P/L: €${{p.pnl.toFixed(4)}} (${{p.closed}} chiusi)`;document.getElementById('openCount').innerText=p.open.length+' aperti';}}
+function resetPaper(){{if(confirm('Azzerare paper?')) savePaper({{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}});}}
+function renderOpen(){{const p=getPaper();const cont=document.getElementById('openTradesList');if(p.open.length===0){{cont.innerHTML='';return;}}let html='';p.open.forEach((t,idx)=>{{let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;let pnlColor=pnl>=0?'#16a34a':'#dc2626';html+=`<div class="open-trade"><div><b>${{t.coin}} ${{t.side}}</b> 1€ @ $${{t.entry.toFixed(0)}}<br><small>ora $${{curPrice.toFixed(0)}} • <span style="color:${{pnlColor}};font-weight:700">${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}</span></small></div><button onclick="closeTrade(${{idx}})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px;font-size:11px">Chiudi</button></div>`;}});cont.innerHTML=html;}}
+function paperTrade(side){{if(!currentDetail||!lastData)return;const info=lastData.coins[currentDetail];const p=getPaper();if(p.balance<1){{alert('Saldo finito');return;}}const trade={{id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price,time:new Date().toLocaleTimeString(),tf:curTF,conf:info.conf}};p.open.push(trade);p.trades.unshift(trade);p.balance-=1;savePaper(p);closeModal();alert(`Aperto ${{trade.side}} ${{currentDetail}}`);}}
+function closeTrade(idx){{const p=getPaper();if(idx<0||idx>=p.open.length)return;const t=p.open[idx];let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;p.balance+=1+pnl;p.pnl+=pnl;p.closed+=1;p.open.splice(idx,1);savePaper(p);alert(`Chiuso P/L ${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}`);}}
+async function subscribePush(){{try{{const reg=await navigator.serviceWorker.register('/sw.js');await new Promise(r=>setTimeout(r,400));let ex=await reg.pushManager.getSubscription();if(ex){{try{{await ex.unsubscribe();}}catch{{}}}}const perm=await Notification.requestPermission();if(perm!=='granted')return;const sub=await reg.pushManager.subscribe({{userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}});const res=await fetch('/api/push/subscribe',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(sub)}});const j=await res.json();document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total;}}catch(e){{}}}}
+async function testPush(){{const r=await fetch('/api/push/test',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{}})}});const j=await r.json();alert('Test '+j.result.sent);}}
 function colorFor(s){{return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}}
 function bgFor(s){{return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}}
 function setSens(v){{curSens=v;document.querySelectorAll('.sens button').forEach(b=>b.classList.remove('active'));document.getElementById('s'+v).classList.add('active');loadTF(curTF);}}
 async function loadTF(tf){{
   curTF=tf;
-  document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active')); const el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ V8.1 '+curSens+'% '+tf+'...</div>';
+  document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));const el=document.getElementById('b'+tf);if(el)el.classList.add('active');
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ V8.2 '+curSens+'% '+tf+'...</div>';
   try{{
-    const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens); const d=await res.json(); lastData=d;
-    document.getElementById('globale').innerText=d.globale||'...'; document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf; document.getElementById('agg').innerText=d.updated||'--'; document.getElementById('srcInfo').innerText=d.source||'';
+    const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens);const d=await res.json();lastData=d;
+    document.getElementById('globale').innerText=d.globale||'...';document.getElementById('globale').style.color=colorFor(d.globale);
+    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf;document.getElementById('agg').innerText=d.updated||'--';document.getElementById('srcInfo').innerText=d.source||'';
     let html='';
     for(let [name,info] of Object.entries(d.coins)){{
-      const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro'; const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
-      html+=`<div class=coin-row onclick="openDetails('${{name}}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${{icon}}">${{ico}}</div><div><b>${{name}} <span style="font-size:9px;color:#64748b">ADX ${{info.adx.toFixed(0)}}</span></b><div style="font-size:10px;color:#64748b">RSI ${{info.rsi.toFixed(1)}} • ${{info.trend}}</div><div style="font-size:9px;color:#94a3b8">${{info.reasons.slice(0,2).join(' • ')}}</div></div></div><div style="text-align:right"><span class="badge ${{bgFor(info.signal)}}">${{info.signal}} ${{info.conf}}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${{info.price.toFixed(2)}}</div></div></div>`;
+      const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro';const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
+      html+=`<div class=coin-row onclick="openDetails('${{name}}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${{icon}}">${{ico}}</div><div><b>${{name}} <span style="font-size:9px;color:#64748b">ADX ${{info.adx.toFixed(0)}}</span></b><div style="font-size:10px;color:#64748b">RSI ${{info.rsi.toFixed(1)}} • ${{info.trend}}</div></div></div><div style="text-align:right"><span class="badge ${{bgFor(info.signal)}}">${{info.signal}} ${{info.conf}}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${{info.price.toFixed(2)}}</div></div></div>`;
     }}
-    document.getElementById('coins').innerHTML=html;
-    renderOpen();
-  }}catch(e){{document.getElementById('coins').innerHTML='<div style="padding:20px;color:#dc2626">Errore: '+e.message+'</div>';}}
+    document.getElementById('coins').innerHTML=html;renderOpen();
+  }}catch(e){{document.getElementById('coins').innerHTML='Errore '+e.message;}}
 }}
-function toggleHist(){{const l=document.getElementById('histList');const a=document.getElementById('histArrow'); if(l.style.display=='none'||l.style.display==''){{l.style.display='block';a.innerText='▲';}}else{{l.style.display='none';a.innerText='▼';}}}}
 async function openDetails(coin){{
-  if(!lastData) return; const info=lastData.coins[coin]; if(!info) return; currentDetail=coin;
-  document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF;
+  if(!lastData)return;const info=lastData.coins[coin];if(!info)return;currentDetail=coin;
+  document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' • ORO FIX';
   document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' • '+info.trend;
-  document.getElementById('mSignal').innerText=info.signal; document.getElementById('mSignal').style.color=colorFor(info.signal);
+  document.getElementById('mSignal').innerText=info.signal;document.getElementById('mSignal').style.color=colorFor(info.signal);
   document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%';
   document.getElementById('mRsi').innerText='RSI '+info.rsi;
   document.getElementById('mAdx').innerText='ADX '+info.adx.toFixed(0)+' Vol x'+info.vol_ratio.toFixed(2);
   document.getElementById('mEma').innerText='$'+info.ema50.toFixed(0)+' / $'+info.ema200.toFixed(0);
-  document.getElementById('mEmaDetail').innerText=info.ema50>info.ema200?'Sopra rialzista':'Sotto ribassista';
+  document.getElementById('mEmaDetail').innerText=info.ema50>info.ema200?'Sopra rialzista':'Sotto';
   document.getElementById('mBb').innerText='BB '+info.bb_up.toFixed(0)+'/'+info.bb_low.toFixed(0);
   document.getElementById('mMacd').innerText='MACD '+info.macd.toFixed(2)+' vs '+info.macd_signal.toFixed(2);
   document.getElementById('mEntry').innerText='$'+info.price.toFixed(2);
@@ -507,26 +428,35 @@ async function openDetails(coin){{
 }}
 async function loadChart(coin, tf){{
   try{{
-    const r=await fetch('/api/chart?coin='+coin+'&tf='+tf); const j=await r.json(); if(!j.ok) return;
-    const chartEl=document.getElementById('chart'); chartEl.innerHTML='';
-    const c=LightweightCharts.createChart(chartEl, {{width: chartEl.clientWidth, height:180, layout:{{background:{{color:'#0f172a'}}, textColor:'#94a3b8'}}, grid:{{vertLines:{{color:'#1e293b'}}, horzLines:{{color:'#1e293b'}}}}, timeScale:{{timeVisible:true}} }});
-    const series=c.addCandlestickSeries(); series.setData(j.data.map(d=>({{time:d.time, open:d.open, high:d.high, low:d.low, close:d.close}}))); c.timeScale().fitContent();
+    const r=await fetch('/api/chart?coin='+coin+'&tf='+tf);const j=await r.json();if(!j.ok)return;
+    const chartEl=document.getElementById('chart');chartEl.innerHTML='';
+    const c=LightweightCharts.createChart(chartEl,{{width:chartEl.clientWidth,height:200,layout:{{background:{{color:'#0f172a'}},textColor:'#94a3b8'}},grid:{{vertLines:{{color:'#1e293b'}},horzLines:{{color:'#1e293b'}}}},timeScale:{{timeVisible:true}}}});
+    const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({{time:d.time,open:d.open,high:d.high,low:d.low,close:d.close}})));c.timeScale().fitContent();
   }}catch(e){{}}
 }}
 async function loadBacktest(coin, tf){{
   try{{
-    const r=await fetch('/api/backtest?coin='+coin+'&tf='+tf+'&sens='+curSens); const j=await r.json();
-    const el=document.getElementById('mBacktest');
-    const last20=j.last20_win||0; const cls = last20>=60?'win-high':last20>=50?'win-mid':'win-low';
-    el.innerHTML=`<b>📊 WinRate</b> <span class="win-badge ${{cls}}">${{last20}}% ultimi 20</span><br><small>${{j.wins||0}}/${{j.total_signals||0}} vinti (${{j.win_rate||0}}%) su ${{tf}}</small><div style="margin-top:4px">${{(j.last20||[]).slice(0,5).map(x=>`<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${{x.win?'#22c55e':'#ef4444'}};margin-right:3px"></span>`).join('')}} <small style="color:#64748b">verde=win</small></div>`;
+    const elBig=document.getElementById('mWinRateBig');
+    elBig.style.display='block';
+    elBig.innerHTML='⏳ Calcolo WinRate...';
+    const r=await fetch('/api/backtest?coin='+coin+'&tf='+tf+'&sens='+curSens);
+    const j=await r.json();
+    const last20=j.last20_win||0;
+    const wr=j.win_rate||0;
+    const cls = last20>=60?'win-high':last20>=50?'win-mid':'win-low';
+    const total=j.total_signals||0;
+    const wins=j.wins||0;
+    elBig.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><div style="text-align:left"><b style="font-size:14px">📊 WINRATE ${{tf}}</b><br><small style="color:#64748b">${{wins}}/${{total}} vinti • ${{wr}}% storico</small></div><span class="win-badge ${{cls}}" style="font-size:16px">${{last20}}%</span></div><div style="margin-top:8px;display:flex;gap:3px;justify-content:center">${{(j.last20||[]).slice(0,12).map(x=>`<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${{x.win?'#22c55e':'#ef4444'}};border:1px solid white"></span>`).join('')}} </div><small style="color:#64748b">Ultimi 12 segnali reali: verde=win rosso=loss • guarda 3 candele dopo</small>`;
     document.getElementById('mWinRate').innerHTML=`<span class="win-badge ${{cls}}">${{last20}}% win</span>`;
-  }}catch(e){{}}
+  }}catch(e){{
+    document.getElementById('mWinRateBig').innerHTML='Errore winrate: '+e.message;
+  }}
 }}
 function closeModal(){{document.getElementById('modal').classList.remove('show')}}
 function openChart(){{if(!currentDetail)return;const map={{BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}}
-loadTF('5m'); setInterval(()=>{{loadTF(curTF); renderOpen();}},15000);
+loadTF('4H'); setInterval(()=>{{loadTF(curTF);renderOpen();}},20000);
 updatePaperBar();
-if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').then(()=>{{fetch('/api/ping').then(r=>r.json()).then(j=>{{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - V8.1';}})}});}}
+if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').then(()=>{{fetch('/api/ping').then(r=>r.json()).then(j=>{{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - V8.2';}})}});}}
 </script>
 </body></html>
 """
