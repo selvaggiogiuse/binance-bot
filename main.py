@@ -37,7 +37,6 @@ def save_last(d):
     try:
         with open(LAST_SIGNALS_FILE,"w") as f: json.dump(d,f)
     except: pass
-
 def ema_calc(data, period):
     if len(data) < period: period = len(data) or 1
     k = 2 / (period + 1); ema = data[0]
@@ -59,7 +58,6 @@ def atr_calc(highs, lows, closes, period=14):
     for i in range(1, len(closes)):
         tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])); trs.append(tr)
     return sum(trs[-period:])/period if trs else closes[-1]*0.02
-
 def supertrend_calc(highs, lows, closes, period=10, multiplier=3.0):
     if len(closes) < period+5:
         return closes[-1]*0.99, 1
@@ -72,7 +70,6 @@ def supertrend_calc(highs, lows, closes, period=10, multiplier=3.0):
             atrs.append(sum(trs[:i+1])/(i+1))
         else:
             atrs.append(sum(trs[i-period+1:i+1])/period)
-    # prepend 0 for first candle
     atrs = [atrs[0]] + atrs
     upper = []; lower=[]
     for i in range(len(closes)):
@@ -92,7 +89,6 @@ def supertrend_calc(highs, lows, closes, period=10, multiplier=3.0):
         else:
             st = upper[i]
     return st, trend
-
 def stoch_calc(highs, lows, closes, period=14, smooth=3):
     if len(closes) < period:
         return 50.0, 50.0
@@ -114,7 +110,6 @@ def stoch_calc(highs, lows, closes, period=14, smooth=3):
         else:
             d_vals.append(sum(k_vals[i-smooth+1:i+1])/smooth)
     return k_vals[-1], d_vals[-1]
-
 def vwap_calc(highs, lows, closes, volumes, period=20):
     period = min(period, len(closes))
     if period < 2:
@@ -125,7 +120,6 @@ def vwap_calc(highs, lows, closes, volumes, period=20):
     if s == 0:
         return closes[-1]
     return sum(t*v for t,v in zip(tp, vol))/s
-
 def sr_calc(highs, lows, closes, lookback=20):
     if len(closes) < lookback+2:
         return min(lows), max(highs)
@@ -134,7 +128,6 @@ def sr_calc(highs, lows, closes, lookback=20):
     support = min(recent_lows) if recent_lows else min(lows)
     resistance = max(recent_highs) if recent_highs else max(highs)
     return support, resistance
-
 def macd_calc(closes):
     ema12 = ema_calc(closes[-100:], 12) if len(closes)>=12 else ema_calc(closes, 12)
     ema26 = ema_calc(closes[-100:], 26) if len(closes)>=26 else ema_calc(closes, 26)
@@ -177,6 +170,93 @@ def get_ohlc(coin, tf):
         if not ohlc or len(ohlc) < 30: return None
         OHLC_CACHE[key] = (now, ohlc); return ohlc
     except: return None
+def compute_entry_quality(comp):
+    signal = comp["signal"]
+    score = 0
+    checks = []
+    if signal == "FERMO":
+        return {"score": 20, "label": "⏳ ASPETTA", "color": "wait", "simple": "Nessun movimento chiaro. Meglio non fare nulla.", "checks": []}
+    if comp["conf"] >= 70:
+        score += 20; checks.append("Affidabilità alta")
+    elif comp["conf"] >= 65:
+        score += 12
+    elif comp["conf"] >= 60:
+        score += 5
+    if comp["adx"] >= 25:
+        score += 10
+    elif comp["adx"] >= 18:
+        score += 5
+    if comp["vol_ratio"] >= 1.2:
+        score += 10
+    elif comp["vol_ratio"] >= 0.8:
+        score += 5
+    if signal == "COMPRA" and comp["st_trend"] == 1 and comp["price"] > comp["st_val"]:
+        score += 15
+    elif signal == "VENDI" and comp["st_trend"] == -1 and comp["price"] < comp["st_val"]:
+        score += 15
+    if signal == "COMPRA":
+        if comp["stoch_k"] < 40 and comp["stoch_k"] > comp["stoch_d"]:
+            score += 10
+        elif comp["stoch_k"] < 25:
+            score += 8
+        elif comp["stoch_k"] < 60:
+            score += 4
+    else:
+        if comp["stoch_k"] > 60 and comp["stoch_k"] < comp["stoch_d"]:
+            score += 10
+        elif comp["stoch_k"] > 75:
+            score += 8
+        elif comp["stoch_k"] > 40:
+            score += 4
+    if signal == "COMPRA" and comp["price"] > comp["vwap"]:
+        score += 10
+    elif signal == "VENDI" and comp["price"] < comp["vwap"]:
+        score += 10
+    if signal == "COMPRA":
+        if comp["dist_sup"] < 1.0 and comp["dist_res"] > 0.8:
+            score += 10
+        elif comp["dist_sup"] < 2.0:
+            score += 4
+    else:
+        if comp["dist_res"] < 1.0 and comp["dist_sup"] > 0.8:
+            score += 10
+        elif comp["dist_res"] < 2.0:
+            score += 4
+    if signal == "COMPRA" and comp["ema50"] > comp["ema200"]:
+        score += 5
+    elif signal == "VENDI" and comp["ema50"] < comp["ema200"]:
+        score += 5
+    if signal == "COMPRA" and comp["macd"] > comp["macd_signal"]:
+        score += 5
+    elif signal == "VENDI" and comp["macd"] < comp["macd_signal"]:
+        score += 5
+
+    # Messaggio semplice per principianti
+    if signal == "COMPRA":
+        if score >= 70:
+            simple = f"Il prezzo sta salendo. È vicino al supporto (${comp['support']:.0f}) e ha spazio per salire fino a ${comp['resistance']:.0f}. Buon momento per COMPRARE con 1€."
+        elif score >= 50:
+            simple = f"Sta provando a salire, ma non è ancora fortissimo. Meglio aspettare la prossima candela."
+        else:
+            simple = f"Non è un buon momento per comprare. Il trend è debole, rischi di perdere l'1€ di fee."
+    else: # VENDI
+        if score >= 70:
+            simple = f"Il prezzo sta scendendo. È vicino alla resistenza (${comp['resistance']:.0f}) e può scendere fino a ${comp['support']:.0f}. Buon momento per VENDERE con 1€."
+        elif score >= 50:
+            simple = f"Sta provando a scendere, ma non è ancora fortissimo. Meglio aspettare."
+        else:
+            simple = f"Non è un buon momento per vendere. Sei vicino al supporto, potrebbe rimbalzare."
+
+    if score >= 70:
+        label = "✅ ENTRA"; color = "entra"
+    elif score >= 50:
+        label = "⚠️ QUASI"; color = "quasi"
+    else:
+        label = "⏳ ASPETTA"; color = "wait"
+        if signal != "FERMO":
+            simple = "Meglio non fare nulla adesso. Aspetta un segnale con ✅ ENTRA."
+
+    return {"score": score, "label": label, "color": color, "simple": simple, "checks": checks}
 
 def compute_from_ohlc(ohlc, live_price=None, sens=55):
     closes = [float(x[4]) for x in ohlc]; highs = [float(x[2]) for x in ohlc]; lows = [float(x[3]) for x in ohlc]; volumes = [float(x[6]) for x in ohlc]
@@ -184,7 +264,6 @@ def compute_from_ohlc(ohlc, live_price=None, sens=55):
     rsi = rsi_calc(closes); ema50 = ema_calc(closes, 50); ema200 = ema_calc(closes, 200)
     bb_up, bb_low, bb_mid = bollinger_calc(closes); macd, macd_sig = macd_calc(closes)
     adx = adx_calc(highs, lows, closes); atr = atr_calc(highs, lows, closes)
-    # NEW INDICATORS V9
     st_val, st_trend = supertrend_calc(highs, lows, closes, 10, 3.0)
     stoch_k, stoch_d = stoch_calc(highs, lows, closes, 14, 3)
     vwap = vwap_calc(highs, lows, closes, volumes, 20)
@@ -192,57 +271,33 @@ def compute_from_ohlc(ohlc, live_price=None, sens=55):
     vol_avg = sum(volumes[-20:])/20 if len(volumes)>=20 else volumes[-1] if volumes else 1
     vol_ratio = volumes[-1]/vol_avg if vol_avg else 1.0
     bullish = 50; bearish = 50; reasons = []
-    # RSI
-    if rsi < 30: bullish+=20; reasons.append(f"RSI ipervenduto {rsi:.0f}")
-    elif rsi > 70: bearish+=20; reasons.append(f"RSI ipercomprato {rsi:.0f}")
-    elif rsi > 55: bullish+=8; reasons.append(f"RSI {rsi:.0f} rialzista")
-    elif rsi < 45: bearish+=8; reasons.append(f"RSI {rsi:.0f} ribassista")
-    else: reasons.append(f"RSI neutro {rsi:.0f}")
-    # EMA
-    if ema50 > ema200: bullish+=10; reasons.append("EMA 50>200 rialzista")
-    else: bearish+=10; reasons.append("EMA 50<200 ribassista")
+    if rsi < 30: bullish+=20
+    elif rsi > 70: bearish+=20
+    elif rsi > 55: bullish+=8
+    elif rsi < 45: bearish+=8
+    if ema50 > ema200: bullish+=10
+    else: bearish+=10
     if close_price > ema50: bullish+=6
     else: bearish+=6
-    # MACD
-    if macd > macd_sig: bullish+=8; reasons.append("MACD ↑")
-    else: bearish+=8; reasons.append("MACD ↓")
-    # BB
-    if close_price > bb_up: bearish+=8; reasons.append("Sopra BB upper")
-    elif close_price < bb_low: bullish+=8; reasons.append("Sotto BB lower")
-    # NEW: Supertrend
-    if st_trend == 1 and close_price > st_val:
-        bullish+=12; reasons.append(f"Supertrend 🟢")
-    elif st_trend == -1 and close_price < st_val:
-        bearish+=12; reasons.append(f"Supertrend 🔴")
-    else:
-        reasons.append("Supertrend laterale")
-    # NEW: Stochastic
-    if stoch_k < 20 and stoch_k > stoch_d:
-        bullish+=10; reasons.append(f"Stoch ipervenduto {stoch_k:.0f}")
-    elif stoch_k > 80 and stoch_k < stoch_d:
-        bearish+=10; reasons.append(f"Stoch ipercomprato {stoch_k:.0f}")
-    elif stoch_k > stoch_d:
-        bullish+=5; reasons.append(f"Stoch ↑ {stoch_k:.0f}")
-    else:
-        bearish+=5; reasons.append(f"Stoch ↓ {stoch_k:.0f}")
-    # NEW: VWAP
-    if close_price > vwap:
-        bullish+=6; reasons.append(f"Sopra VWAP")
-    else:
-        bearish+=6; reasons.append(f"Sotto VWAP")
-    # NEW: Support/Resistance
+    if macd > macd_sig: bullish+=8
+    else: bearish+=8
+    if close_price > bb_up: bearish+=8
+    elif close_price < bb_low: bullish+=8
+    if st_trend == 1 and close_price > st_val: bullish+=12
+    elif st_trend == -1 and close_price < st_val: bearish+=12
+    if stoch_k < 20 and stoch_k > stoch_d: bullish+=10
+    elif stoch_k > 80 and stoch_k < stoch_d: bearish+=10
+    elif stoch_k > stoch_d: bullish+=5
+    else: bearish+=5
+    if close_price > vwap: bullish+=6
+    else: bearish+=6
     dist_sup = (close_price - support)/close_price*100 if close_price else 0
     dist_res = (resistance - close_price)/close_price*100 if close_price else 0
-    if dist_sup < 1.0:
-        bullish+=6; reasons.append(f"Vicino supporto")
-    if dist_res < 1.0:
-        bearish+=6; reasons.append(f"Vicino resistenza {dist_res:.1f}%")
-    # Vol
+    if dist_sup < 1.0: bullish+=6
+    if dist_res < 1.0: bearish+=6
     if vol_ratio > 1.2:
         if bullish>bearish: bullish+=4
         else: bearish+=4
-        reasons.append(f"Vol x{vol_ratio:.1f}")
-
     total = bullish+bearish; bull_pct = bullish/total*100
     buy_thr = sens; sell_thr = 100 - sens
     if bull_pct >= buy_thr: signal = "COMPRA"; conf = int(bull_pct)
@@ -252,8 +307,15 @@ def compute_from_ohlc(ohlc, live_price=None, sens=55):
     if signal == "COMPRA": sl = close_price - atr*1.5; tp = close_price + atr*2.5
     elif signal == "VENDI": sl = close_price + atr*1.5; tp = close_price - atr*2.5
     else: sl = close_price - atr; tp = close_price + atr
-    return {"price": close_price,"rsi": round(rsi,1),"signal": signal,"conf": conf,"trend": trend,"ema50": ema50,"ema200": ema200,"bb_up": bb_up,"bb_low": bb_low,"macd": macd,"macd_signal": macd_sig,"vol_ratio": round(vol_ratio,2),"adx": round(adx,0),"atr": round(atr,2),"sl": sl,"tp": tp,"reasons": reasons[:6],"bullish": int(bull_pct),"bearish": int(100-bull_pct),
+    comp = {"price": close_price,"rsi": round(rsi,1),"signal": signal,"conf": conf,"trend": trend,"ema50": ema50,"ema200": ema200,"bb_up": bb_up,"bb_low": bb_low,"macd": macd,"macd_signal": macd_sig,"vol_ratio": round(vol_ratio,2),"adx": round(adx,0),"atr": round(atr,2),"sl": sl,"tp": tp,"reasons": reasons[:6],"bullish": int(bull_pct),"bearish": int(100-bull_pct),
             "st_val": st_val, "st_trend": st_trend, "stoch_k": round(stoch_k,1), "stoch_d": round(stoch_d,1), "vwap": vwap, "support": support, "resistance": resistance, "dist_sup": round(dist_sup,2), "dist_res": round(dist_res,2)}
+    quality = compute_entry_quality(comp)
+    comp["quality_score"] = quality["score"]
+    comp["quality_label"] = quality["label"]
+    comp["quality_color"] = quality["color"]
+    comp["quality_simple"] = quality["simple"]
+    comp["quality_checks"] = quality["checks"]
+    return comp
 
 def binance_fast_price():
     try:
@@ -273,7 +335,7 @@ def kraken_fast_price_fallback():
             elif "PAXG" in k: out["ORO"]=p
         return out
     except: return {}
-def send_push_to_all(title, body, url="/app?v=9"):
+def send_push_to_all(title, body, url="/app?v=10"):
     subs = load_subs()
     if not subs: return {"sent":0}
     try:
@@ -288,7 +350,7 @@ def send_push_to_all(title, body, url="/app?v=9"):
     except: return {"sent":0}
 
 @app.route("/api/ping")
-def ping(): return jsonify({"ok":True,"msg":"V9 SUPERTREND STOCH VWAP SR","time":rome_now().isoformat(),"subs": len(load_subs())})
+def ping(): return jsonify({"ok":True,"msg":"V10 LITE BEGINNER","time":rome_now().isoformat(),"subs": len(load_subs())})
 @app.route("/api/signals")
 def signals():
     tf = request.args.get("tf","1H"); sens = int(request.args.get("sens","55"))
@@ -304,8 +366,7 @@ def signals():
             coins_data[coin]["symbol"]=f"{coin}USD"
             coins_data[coin]["tf"]=tf
         else:
-            price = live if live else (1881 if coin=="ETH" else 63090)
-            coins_data[coin] = {"symbol": f"{coin}USD","price": price,"rsi": 50.0,"signal": "FERMO","conf": 50,"trend": "Caricamento","tf": tf,"ema50": price*0.99,"ema200": price*0.98,"bb_up": price*1.02,"bb_low": price*0.98,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": price*0.02,"sl": price*0.99,"tp": price*1.01,"reasons": ["OHLC in caricamento..."],"bullish": 50,"bearish": 50,"st_val": price*0.99,"st_trend":1,"stoch_k":50,"stoch_d":50,"vwap":price,"support":price*0.98,"resistance":price*1.02,"dist_sup":2,"dist_res":2}
+            coins_data[coin] = {"symbol": f"{coin}USD","price": 0,"rsi": 50.0,"signal": "FERMO","conf": 50,"trend": "Caricamento","tf": tf,"ema50": 0,"ema200": 0,"bb_up": 0,"bb_low": 0,"macd": 0,"macd_signal": 0,"vol_ratio": 1.0,"adx": 20,"atr": 0,"sl": 0,"tp": 0,"reasons": [],"bullish": 50,"bearish": 50,"st_val": 0,"st_trend":1,"stoch_k":50,"stoch_d":50,"vwap":0,"support":0,"resistance":0,"dist_sup":2,"dist_res":2,"quality_score":0,"quality_label":"⏳ ASPETTA","quality_color":"wait","quality_simple":"Caricamento...","quality_checks":[]}
     max_conf=0; globale="FERMO"
     for v in coins_data.values():
         if v["signal"] in ("COMPRA","VENDI") and v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
@@ -313,7 +374,7 @@ def signals():
         for v in coins_data.values():
             if v["conf"]>max_conf: max_conf=v["conf"]; globale=v["signal"]
     btc_price = coins_data["BTC"]["price"]
-    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} V9 TF {tf} BTC ${btc_price:.2f} • Roma {rome_now().strftime('%H:%M')}"})
+    return jsonify({"coins": coins_data,"globale": globale,"tf": tf,"updated": rome_now().strftime("%H:%M:%S"),"source": f"{source_name} V10 LITE TF {tf}"})
 @app.route("/api/backtest")
 def backtest():
     coin = request.args.get("coin","ETH"); tf = request.args.get("tf","1H"); sens = int(request.args.get("sens","55"))
@@ -341,26 +402,12 @@ def chart_data():
     ohlc = get_ohlc(coin, tf)
     if not ohlc: return jsonify({"ok":False})
     data=[]
-    for c in ohlc[-120:]:
+    for c in ohlc[-80:]:
         data.append({"time": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4])})
     live = binance_fast_price()
     if live.get(coin) and data:
         data[-1]["close"] = live[coin]
     return jsonify({"ok":True, "data": data})
-@app.route("/api/history")
-def history():
-    sens = int(request.args.get("sens","55")); live = binance_fast_price()
-    if not live: live = kraken_fast_price_fallback()
-    all_signals = []
-    for tf in ["5m","15m","1H","4H","1D"]:
-        for coin in ["BTC","ETH","ORO"]:
-            ohlc = get_ohlc(coin, tf)
-            if not ohlc: continue
-            comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
-            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
-                all_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"rsi": comp["rsi"],"price": comp["price"],"time": f"{tf} • {rome_now().strftime('%H:%M')}","adx": comp["adx"],"reasons": comp["reasons"]})
-    all_signals.sort(key=lambda x: x["conf"], reverse=True)
-    return jsonify(all_signals[:20])
 @app.route("/api/push/subscribe", methods=["POST"])
 def sub():
     try:
@@ -370,236 +417,159 @@ def sub():
         return jsonify({"ok":True,"total":len(subs)})
     except Exception as e:
         return jsonify({"ok":False,"error": str(e)}), 500
-@app.route("/api/push/clear", methods=["POST"])
-def clear_subs():
-    save_subs([]); return jsonify({"ok":True,"total":0})
-@app.route("/api/push/test", methods=["POST"])
-def testp():
-    subs = load_subs()
-    result = send_push_to_all(f"🔔 Test V9", f"PUSH OK {len(subs)} con nuovi indicatori")
-    return jsonify({"ok": True, "result": result, "subs": len(subs)})
-@app.route("/api/cron/check", methods=["GET","POST"])
-def cron_check():
-    sens = int(request.args.get("sens","55")); live = binance_fast_price()
-    if not live: live = kraken_fast_price_fallback()
-    last = load_last(); new_signals = []
-    for tf in ["5m","15m","1H"]:
-        for coin in ["BTC","ETH","ORO"]:
-            ohlc = get_ohlc(coin, tf)
-            if not ohlc: continue
-            comp = compute_from_ohlc(ohlc, live.get(coin), sens=sens)
-            if comp["signal"] in ("COMPRA","VENDI") and comp["conf"] >= sens:
-                key = f"{coin}_{tf}_{comp['signal']}"
-                if last.get(key) != comp["conf"]:
-                    new_signals.append({"coin": coin,"tf": tf,"signal": comp["signal"],"conf": comp["conf"],"price": comp["price"]})
-                    last[key]=comp["conf"]
-    save_last(last); sent_total=0
-    for sig in new_signals:
-        r = send_push_to_all(f"{'🟢' if sig['signal']=='COMPRA' else '🔴'} {sig['coin']} {sig['signal']} {sig['conf']}%", f"${sig['price']:.2f}", url=f"/app?v=9&tf={sig['tf']}")
-        sent_total+=r.get("sent",0)
-    return jsonify({"ok": True, "new_signals": new_signals, "sent": sent_total, "subs": len(load_subs())})
 @app.route("/sw.js")
 def sw():
-    return Response("self.addEventListener('push',function(e){let d={};try{d=e.data.json()}catch{d={title:'Vendi PRO',body:e.data.text()}}const t=d.title||'Vendi PRO V9';const o={body:d.body||'Segnale!',icon:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',badge:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',data:{url:d.url||'/app?v=9'},vibrate:[200,100,200]};e.waitUntil(self.registration.showNotification(t,o))});self.addEventListener('notificationclick',function(e){e.notification.close();e.waitUntil(clients.openWindow(e.notification.data.url||'/app?v=9'))});", mimetype="application/javascript")
+    return Response("self.addEventListener('push',function(e){let d={};try{d=e.data.json()}catch{d={title:'Vendi PRO',body:e.data.text()}}const t=d.title||'Vendi PRO V10';const o={body:d.body||'Segnale!',icon:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',badge:'https://cdn-icons-png.flaticon.com/512/6001/6001527.png',data:{url:d.url||'/app?v=10'},vibrate:[200,100,200]};e.waitUntil(self.registration.showNotification(t,o))});self.addEventListener('notificationclick',function(e){e.notification.close();e.waitUntil(clients.openWindow(e.notification.data.url||'/app?v=10'))});", mimetype="application/javascript")
 @app.route("/")
 @app.route("/app")
 def app_page():
     return f"""
 <!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>V9 SUPERTREND STOCH VWAP</title>
+<title>V10 LITE per Principianti</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{{font-family:'Inter',sans-serif;box-sizing:border-box;margin:0;padding:0}}
 body{{background:#f8fafc;min-height:100vh;padding:12px 12px 120px}}
-.header{{background:linear-gradient(135deg,#0f172a 0%,#10b981 100%);border-radius:20px;padding:14px;color:white;display:flex;justify-content:space-between;align-items:center}}
-.logo{{width:40px;height:40px;background:rgba(255,255,255,.15);border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800}}
-.tfs{{display:flex;gap:5px;margin:10px 0;overflow-x:auto}}
-.tfs button{{border:none;background:white;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.06)}}
+.header{{background:linear-gradient(135deg,#0f172a 0%,#3b82f6 100%);border-radius:20px;padding:16px;color:white}}
+.tfs{{display:flex;gap:6px;margin:12px 0}}
+.tfs button{{border:none;background:white;padding:10px 14px;border-radius:999px;font-weight:700;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.06)}}
 .tfs button.active{{background:#0f172a;color:white}}
-.sens{{display:flex;gap:6px;margin:8px 0}}
-.sens button{{border:1px solid #e2e8f0;background:white;padding:6px 10px;border-radius:999px;font-weight:700;font-size:11px}}
-.sens button.active{{background:#10b981;color:white;border-color:#10b981}}
-.coin-card{{background:white;border-radius:18px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:10px}}
-.coin-row{{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f8fafc;cursor:pointer}}
-.coin-icon{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:13px}}
+.coin-card{{background:white;border-radius:20px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.05);border:1px solid #f1f5f9;margin-top:12px}}
+.coin-row{{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid #f8fafc;cursor:pointer}}
+.coin-icon{{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:16px}}
 .btc{{background:linear-gradient(135deg,#f59e0b,#f97316)}}.eth{{background:linear-gradient(135deg,#6366f1,#8b5cf6)}}.oro{{background:linear-gradient(135deg,#eab308,#ca8a04)}}
-.badge{{padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}}
-.FERMO-bg{{background:#fef3c7;color:#92400e}}.COMPRA-bg{{background:#dcfce7;color:#166534}}.VENDI-bg{{background:#fee2e2;color:#991b1b}}
-.paper-bar{{background:#0f172a;color:white;border-radius:14px;padding:10px 12px;margin-top:10px;display:flex;justify-content:space-between;align-items:center;font-size:12px}}
-.fab{{position:fixed;bottom:12px;left:10px;right:10px;display:flex;gap:6px;z-index:20}}
-.fab button{{flex:1;padding:10px;border-radius:14px;border:none;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:11px}}
-.btn-dark{{background:#0f172a;color:white}}.btn-light{{background:white;color:#0f172a;border:1px solid #e2e8f0!important}}.btn-blue{{background:#10b981;color:white}}
-#modal{{position:fixed;inset:0;background:rgba(15,23,42,.75);backdrop-filter:blur(12px);display:none;align-items:end;justify-content:center;z-index:50;padding:8px}}
+.badge{{padding:6px 10px;border-radius:999px;font-weight:800;font-size:12px}}
+.badge-entra{{background:#dcfce7;color:#166534;border:2px solid #16a34a}}.badge-quasi{{background:#fef3c7;color:#92400e;border:2px solid #d97706}}.badge-wait{{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}}
+.paper-bar{{background:#0f172a;color:white;border-radius:14px;padding:12px;margin-top:12px;display:flex;justify-content:space-between;align-items:center}}
+#modal{{position:fixed;inset:0;background:rgba(15,23,42,.75);backdrop-filter:blur(12px);display:none;align-items:end;justify-content:center;z-index:50;padding:10px}}
 #modal.show{{display:flex}}
-.modal-box{{background:white;width:100%;max-width:580px;border-radius:20px;padding:14px;max-height:96vh;overflow:auto}}
-.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}}
-.grid3{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:8px 0}}
-.reason{{display:inline-block;background:#f1f5f9;padding:3px 6px;border-radius:6px;font-size:9px;margin:2px}}
-.chart-wrap{{background:#0f172a;border-radius:12px;padding:8px;margin:8px 0}}
-.win-badge{{display:inline-block;padding:5px 10px;border-radius:999px;font-weight:800;font-size:12px;margin-left:6px}}
-.win-high{{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}}.win-mid{{background:#fef3c7;color:#92400e}}.win-low{{background:#fee2e2;color:#991b1b}}
-.open-trade{{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:8px;margin:6px 0;font-size:11px;display:flex;justify-content:space-between;align-items:center}}
-.winrate-big{{background:linear-gradient(135deg,#eff6ff 0%,#dcfce7 100%);border:2px solid #10b981;border-radius:12px;padding:10px;margin:8px 0;text-align:center}}
-.new-ind{{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:8px;font-size:11px}}
+.modal-box{{background:white;width:100%;max-width:560px;border-radius:24px;padding:18px;max-height:96vh;overflow:auto}}
+.big-box{{border-radius:16px;padding:18px;margin:12px 0;text-align:center}}
+.entra-big{{background:linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%);border:3px solid #16a34a}}
+.wait-big{{background:linear-gradient(135deg,#f1f5f9 0%,#e2e8f0 100%);border:2px solid #94a3b8}}
+.quasi-big{{background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border:2px solid #d97706}}
+.simple-text{{font-size:14px;line-height:1.5;color:#334155;margin:10px 0}}
+.chart-wrap{{background:#0f172a;border-radius:12px;padding:8px;margin:10px 0}}
 </style>
 </head><body>
-<div class="header"><div style="display:flex;gap:10px;align-items:center"><div class="logo">V9</div><div><b>Vendi PRO V9</b><br><small>Supertrend + Stoch + VWAP + SR</small><br><small id=subStatus>Push: verifica...</small></div></div><div>🚀</div></div>
-<div class="paper-bar" id=paperBar>
-<div><b>💰 Paper Trading</b><br><span id=paperBalance>Saldo: €10.00</span><br><span id=paperPNL style="font-size:10px;color:#94a3b8">P/L: €0.00</span></div>
-<div style="text-align:right"><button onclick="resetPaper()" style="background:rgba(255,255,255,.15);border:none;color:white;padding:6px 10px;border-radius:8px;font-size:10px">Reset</button><div style="font-size:9px;color:#4ade80" id=openCount>0 aperti</div></div>
+<div class="header">
+<div style="display:flex;justify-content:space-between;align-items:center"><div><b style="font-size:18px">V10 LITE 😊</b><br><small>Modalità Principiante - Solo 3 cose da guardare</small></div><div style="font-size:24px">👋</div></div>
+<div style="margin-top:10px;background:rgba(255,255,255,.15);border-radius:12px;padding:10px;font-size:12px">
+👉 <b>Come funziona?</b><br>
+🟢 <b>✅ ENTRA</b> = Puoi comprare/vendere con 1€<br>
+🟡 <b>⚠️ QUASI</b> = Aspetta ancora un po'<br>
+⚪ <b>⏳ ASPETTA</b> = Non fare nulla, rischi di perdere
+</div>
+</div>
+
+<div class="paper-bar">
+<div><b>💰 Il tuo saldo finto</b><br><span id=paperBalance>€10.00</span> • <span id=paperPNL style="color:#94a3b8">P/L €0</span></div>
+<div style="text-align:right"><span id=openCount style="font-size:12px">0 aperti</span></div>
 </div>
 <div id=openTradesList></div>
+
 <div class="tfs">
-<button onclick="loadTF('5m')" id=b5m>5m ⚡</button>
-<button onclick="loadTF('15m')" id=b15m>15m ⚡</button>
-<button onclick="loadTF('1H')" id=b1H class=active>1H</button>
+<button onclick="loadTF('1H')" id=b1H class=active>1H (consigliato)</button>
 <button onclick="loadTF('4H')" id=b4H>4H</button>
 <button onclick="loadTF('1D')" id=b1D>1D</button>
+<button onclick="loadTF('5m')" id=b5m>5m (rischioso)</button>
 </div>
-<div class="sens">
-<button onclick="setSens(55)" id=s55 class=active>SCALPER 55%</button>
-<button onclick="setSens(60)" id=s60>PRO 60%</button>
-<button onclick="setSens(65)" id=s65>ULTRA 65%</button>
-</div>
-<div class="coin-card"><div style="display:flex;justify-content:space-between;padding:12px"><div><small style="color:#64748b">GLOBALE V9</small><div id=globale style="font-weight:800;color:#dc2626;font-size:18px">...</div><small id=globaleSub style="color:#64748b"></small></div><div style="text-align:right"><small style="color:#64748b">AGGIORNATO</small><div id=agg style="font-weight:800">--</div><small id=srcInfo style="color:#10b981;font-size:10px"></small></div></div></div>
-<div class="coin-card" id=coins>Caricamento V9...</div>
+
+<div class="coin-card" id=coins>Caricamento...</div>
 
 <div id=modal><div class="modal-box">
-<div style="display:flex;justify-content:space-between;align-items:center"><div><b id=mCoin>ETH</b> <span id=mWinRate></span></div><span onclick="closeModal()" style="cursor:pointer;font-size:20px">✕</span></div>
+<div style="display:flex;justify-content:space-between;align-items:center"><b id=mCoin style="font-size:18px">ETH</b><span onclick="closeModal()" style="font-size:24px;cursor:pointer">✕</span></div>
 <small id=mPrice style="color:#64748b"></small>
-<div id=mWinRateBig class="winrate-big" style="display:none"></div>
-<div class="chart-wrap"><div id=chart style="height:200px"></div><small id=chartInfo style="color:#94a3b8;font-size:10px">Grafico + Supertrend linea verde/rossa</small></div>
 
-<div class="grid2" style="margin-top:8px">
-<div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>SEGNALE</small><div id=mSignal style="font-weight:800"></div></div>
-<div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>AFFID.</small><div id=mConf style="font-weight:800"></div></div>
-<div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>RSI</small><div id=mRsi></div></div>
-<div style="background:#f8fafc;padding:8px;border-radius:10px;text-align:center"><small>ADX / VOL</small><div id=mAdx></div></div>
-</div>
+<div id=mQualityBig class="big-box wait-big"></div>
 
-<div class="new-ind" id=mNewInd>
-<b>🚀 NUOVI INDICATORI V9</b><br>
-<div class="grid2" style="margin-top:6px">
-<div><small>Supertrend</small><div id=mST style="font-weight:700"></div></div>
-<div><small>Stochastic K/D</small><div id=mStoch style="font-weight:700"></div></div>
-<div><small>VWAP</small><div id=mVwap style="font-weight:700"></div></div>
-<div><small>Supporto / Resistenza</small><div id=mSR style="font-size:10px"></div></div>
-</div>
+<div class="chart-wrap"><div id=chart style="height:180px"></div></div>
+
+<div style="background:#f8fafc;border-radius:12px;padding:12px;margin:8px 0">
+<small style="font-weight:700">📊 Quanto è affidabile?</small>
+<div id=mWinRateBig style="margin-top:6px;font-size:13px"></div>
 </div>
 
-<div class="grid2" style="margin-top:8px">
-<div style="background:#f8fafc;padding:8px;border-radius:10px"><small>EMA 50/200</small><div id=mEma style="font-size:11px"></div><small id=mEmaDetail style="color:#64748b"></small></div>
-<div style="background:#f8fafc;padding:8px;border-radius:10px"><small>BB / MACD</small><div id=mBb style="font-size:11px"></div><div id=mMacd style="font-size:10px;color:#64748b"></div></div>
+<div id=mSimpleBox style="background:#eff6ff;border-radius:12px;padding:14px;margin:8px 0;border-left:4px solid #3b82f6">
+<b style="font-size:13px">💬 In parole semplici:</b>
+<div id=mSimpleText class="simple-text"></div>
 </div>
-<div class="grid2">
-<div style="background:#f8fafc;padding:8px;border-radius:10px"><small>ENTRY</small><div id=mEntry style="font-weight:700"></div></div>
-<div style="background:#f8fafc;padding:8px;border-radius:10px"><small>SL / TP</small><div style="font-size:11px"><span id=mSL></span> / <span id=mTP></span></div></div>
-</div>
-<div><small style="font-weight:700;font-size:11px">Perché (con nuovi filtri):</small><div id=mReasons style="margin-top:4px"></div></div>
 
-<div style="display:flex;gap:6px;margin-top:10px">
-<button onclick="paperTrade('buy')" style="flex:1;padding:12px;border-radius:10px;border:none;background:#dcfce7;color:#166534;font-weight:700;font-size:13px">💰 Compra 1€</button>
-<button onclick="paperTrade('sell')" style="flex:1;padding:12px;border-radius:10px;border:none;background:#fee2e2;color:#991b1b;font-weight:700;font-size:13px">💰 Vendi 1€</button>
+<div style="display:flex;gap:8px;margin-top:12px">
+<button onclick="paperTrade('buy')" id=btnBuy style="flex:1;padding:16px;border-radius:14px;border:none;background:#dcfce7;color:#166534;font-weight:800;font-size:15px">💰 Compra 1€</button>
+<button onclick="paperTrade('sell')" id=btnSell style="flex:1;padding:16px;border-radius:14px;border:none;background:#fee2e2;color:#991b1b;font-weight:800;font-size:15px">💰 Vendi 1€</button>
 </div>
-<button onclick="openChart()" style="margin-top:8px;width:100%;padding:9px;border-radius:10px;border:none;background:#0f172a;color:white;font-weight:700;font-size:12px">📈 TradingView</button>
+
+<details style="margin-top:14px"><summary style="font-size:12px;color:#64748b;cursor:pointer">🔧 Vuoi vedere i dettagli da esperto? (RSI, EMA...)</summary>
+<div id=mExpert style="font-size:11px;color:#64748b;margin-top:8px;background:#f8fafc;padding:10px;border-radius:10px"></div>
+</details>
+
 </div></div>
 
 <script>
 let curTF='1H', curSens=55, lastData=null, currentDetail=null;
-const VAPID_PUBLIC_KEY="{VAPID_PUBLIC}";
-function urlBase64ToUint8Array(b64){{const p='='.repeat((4-b64.length%4)%4);const base64=(b64+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}}
-function getPaper(){{try{{return JSON.parse(localStorage.getItem('paper_v9')||'{{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}')}}catch{{return {{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}}}}}
-function savePaper(p){{localStorage.setItem('paper_v9', JSON.stringify(p)); updatePaperBar(); renderOpen();}}
-function updatePaperBar(){{const p=getPaper();document.getElementById('paperBalance').innerText='Saldo: €'+p.balance.toFixed(2);document.getElementById('paperPNL').innerText=`P/L: €${{p.pnl.toFixed(4)}} (${{p.closed}} chiusi)`;document.getElementById('openCount').innerText=p.open.length+' aperti';}}
-function resetPaper(){{if(confirm('Azzerare paper?')) savePaper({{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}});}}
-function renderOpen(){{const p=getPaper();const cont=document.getElementById('openTradesList');if(p.open.length===0){{cont.innerHTML='';return;}}let html='';p.open.forEach((t,idx)=>{{let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;let pnlColor=pnl>=0?'#16a34a':'#dc2626';html+=`<div class="open-trade"><div><b>${{t.coin}} ${{t.side}}</b> 1€ @ $${{t.entry.toFixed(0)}}<br><small>ora $${{curPrice.toFixed(0)}} • <span style="color:${{pnlColor}};font-weight:700">${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}</span></small></div><button onclick="closeTrade(${{idx}})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px;font-size:11px">Chiudi</button></div>`;}});cont.innerHTML=html;}}
-function paperTrade(side){{if(!currentDetail||!lastData)return;const info=lastData.coins[currentDetail];const p=getPaper();if(p.balance<1){{alert('Saldo finito');return;}}const trade={{id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price,time:new Date().toLocaleTimeString(),tf:curTF,conf:info.conf}};p.open.push(trade);p.trades.unshift(trade);p.balance-=1;savePaper(p);closeModal();}}
-function closeTrade(idx){{const p=getPaper();if(idx<0||idx>=p.open.length)return;const t=p.open[idx];let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;p.balance+=1+pnl;p.pnl+=pnl;p.closed+=1;p.open.splice(idx,1);savePaper(p);}}
-async function subscribePush(){{try{{const reg=await navigator.serviceWorker.register('/sw.js');await new Promise(r=>setTimeout(r,400));let ex=await reg.pushManager.getSubscription();if(ex){{try{{await ex.unsubscribe();}}catch{{}}}}const perm=await Notification.requestPermission();if(perm!=='granted')return;const sub=await reg.pushManager.subscribe({{userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)}});const res=await fetch('/api/push/subscribe',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(sub)}});const j=await res.json();document.getElementById('subStatus').innerText='Push: ATTIVO ✅ '+j.total;}}catch(e){{}}}}
-async function testPush(){{const r=await fetch('/api/push/test',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{}})}});const j=await r.json();alert('Test '+j.result.sent);}}
-function colorFor(s){{return s=='COMPRA'?'#16a34a':s=='VENDI'?'#dc2626':'#d97706'}}
-function bgFor(s){{return s=='COMPRA'?'COMPRA-bg':s=='VENDI'?'VENDI-bg':'FERMO-bg'}}
-function setSens(v){{curSens=v;document.querySelectorAll('.sens button').forEach(b=>b.classList.remove('active'));document.getElementById('s'+v).classList.add('active');loadTF(curTF);}}
+function getPaper(){{try{{return JSON.parse(localStorage.getItem('paper_v10')||'{{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}')}}catch{{return {{"balance":10,"trades":[],"open":[],"pnl":0,"closed":0}}}}}}
+function savePaper(p){{localStorage.setItem('paper_v10', JSON.stringify(p)); updatePaperBar(); renderOpen();}}
+function updatePaperBar(){{const p=getPaper();document.getElementById('paperBalance').innerText='€'+p.balance.toFixed(2);document.getElementById('paperPNL').innerText=`P/L €${{p.pnl.toFixed(3)}}`;document.getElementById('openCount').innerText=p.open.length+' aperti';}}
+function renderOpen(){{const p=getPaper();const cont=document.getElementById('openTradesList');if(p.open.length===0){{cont.innerHTML='';return;}}let html='';p.open.forEach((t,idx)=>{{let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;html+=`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px;margin:6px 0;font-size:12px;display:flex;justify-content:space-between"><div><b>${{t.coin}} ${{t.side}}</b> @ $${{t.entry.toFixed(0)}} • ${{pnl>=0?'+':''}}€${{pnl.toFixed(4)}}</div><button onclick="closeTrade(${{idx}})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px">Chiudi</button></div>`;}});cont.innerHTML=html;}}
+function paperTrade(side){{if(!currentDetail||!lastData)return;const info=lastData.coins[currentDetail];const p=getPaper();if(info.quality_color!='entra' && !confirm(`⚠️ Il sistema dice ${{info.quality_label}}. Sicuro di voler entrare con 1€ finto lo stesso?`))return;if(p.balance<1){{alert('Saldo finito, resetta');return;}}const trade={{id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price}};p.open.push(trade);p.balance-=1;savePaper(p);closeModal();}}
+function closeTrade(idx){{const p=getPaper();const t=p.open[idx];let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;p.balance+=1+pnl;p.pnl+=pnl;p.closed+=1;p.open.splice(idx,1);savePaper(p);}}
+function qualityBadge(q){{if(q.color=='entra')return `<span class="badge badge-entra">${{q.label}}</span>`; if(q.color=='quasi')return `<span class="badge badge-quasi">${{q.label}}</span>`; return `<span class="badge badge-wait">${{q.label}}</span>`;}}
 async function loadTF(tf){{
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));const el=document.getElementById('b'+tf);if(el)el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#64748b">⏳ V9 '+curSens+'% '+tf+'...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center">⏳ Carico...</div>';
   try{{
     const res=await fetch('/api/signals?tf='+tf+'&sens='+curSens);const d=await res.json();lastData=d;
-    document.getElementById('globale').innerText=d.globale||'...';document.getElementById('globale').style.color=colorFor(d.globale);
-    document.getElementById('globaleSub').innerText=(d.globale||'')+' • TF '+tf+' • V9 con Supertrend';document.getElementById('agg').innerText=d.updated||'--';document.getElementById('srcInfo').innerText=d.source||'';
     let html='';
     for(let [name,info] of Object.entries(d.coins)){{
       const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro';const ico=name=='BTC'?'₿':name=='ETH'?'Ξ':'Au';
-      const stIcon = info.st_trend==1?'🟢':'🔴';
-      html+=`<div class=coin-row onclick="openDetails('${{name}}')"><div style="display:flex;gap:8px;align-items:center"><div class="coin-icon ${{icon}}">${{ico}}</div><div><b>${{name}} <span style="font-size:9px">${{stIcon}} ST</span> <span style="font-size:9px;color:#64748b">Stoch ${{info.stoch_k.toFixed(0)}}</span></b><div style="font-size:10px;color:#64748b">RSI ${{info.rsi.toFixed(1)}} • ${{info.trend}} • VWAP ${{info.price>info.vwap?'↑':'↓'}}</div></div></div><div style="text-align:right"><span class="badge ${{bgFor(info.signal)}}">${{info.signal}} ${{info.conf}}%</span><div style="font-weight:800;margin-top:2px;font-size:12px">$${{info.price.toFixed(2)}}</div></div></div>`;
+      const qBadge = qualityBadge(info);
+      const price = `$${{info.price.toFixed(2)}}`;
+      let actionText = info.quality_color=='entra' ? (info.signal=='COMPRA'?'Compra ora':'Vendi ora') : info.quality_color=='quasi' ? 'Quasi pronto' : 'Non fare nulla';
+      html+=`<div class=coin-row onclick="openDetails('${{name}}')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon ${{icon}}">${{ico}}</div><div><b style="font-size:16px">${{name}}</b> • ${{price}}<div style="font-size:12px;color:#64748b;margin-top:2px">${{actionText}}</div></div></div><div style="text-align:right">${{qBadge}}<div style="font-size:11px;color:#64748b;margin-top:4px">${{info.signal}} ${{info.conf}}%</div></div></div>`;
     }}
     document.getElementById('coins').innerHTML=html;renderOpen();
   }}catch(e){{document.getElementById('coins').innerHTML='Errore '+e.message;}}
 }}
 async function openDetails(coin){{
   if(!lastData)return;const info=lastData.coins[coin];if(!info)return;currentDetail=coin;
-  document.getElementById('mCoin').innerText=coin+' • '+info.symbol+' • TF '+curTF+' • V9';
-  document.getElementById('mPrice').innerText='$'+info.price.toFixed(2)+' • '+info.trend;
-  document.getElementById('mSignal').innerText=info.signal;document.getElementById('mSignal').style.color=colorFor(info.signal);
-  document.getElementById('mConf').innerText=info.signal+' '+info.conf+'%';
-  document.getElementById('mRsi').innerText='RSI '+info.rsi;
-  document.getElementById('mAdx').innerText='ADX '+info.adx.toFixed(0)+' Vol x'+info.vol_ratio.toFixed(2);
-  document.getElementById('mEma').innerText='$'+info.ema50.toFixed(0)+' / $'+info.ema200.toFixed(0);
-  document.getElementById('mEmaDetail').innerText=info.ema50>info.ema200?'Sopra rialzista':'Sotto ribassista';
-  document.getElementById('mBb').innerText='BB '+info.bb_up.toFixed(0)+'/'+info.bb_low.toFixed(0);
-  document.getElementById('mMacd').innerText='MACD '+info.macd.toFixed(2)+' vs '+info.macd_signal.toFixed(2);
-  document.getElementById('mEntry').innerText='$'+info.price.toFixed(2);
-  document.getElementById('mSL').innerText=info.sl?'$'+info.sl.toFixed(2):'-';
-  document.getElementById('mTP').innerText=info.tp?'$'+info.tp.toFixed(2):'-';
-  // NEW
-  document.getElementById('mST').innerText=(info.st_trend==1?'🟢 Rialzista':'🔴 Ribassista')+' $'+info.st_val.toFixed(0);
-  document.getElementById('mStoch').innerText='K '+info.stoch_k.toFixed(1)+' D '+info.stoch_d.toFixed(1)+(info.stoch_k<20?' ipervenduto':info.stoch_k>80?' ipercomprato':'');
-  document.getElementById('mVwap').innerText='$'+info.vwap.toFixed(2)+(info.price>info.vwap?' sopra ↑':' sotto ↓');
-  document.getElementById('mSR').innerText='Sup $'+info.support.toFixed(0)+' ('+info.dist_sup.toFixed(1)+'% sotto) Res $'+info.resistance.toFixed(0)+' ('+info.dist_res.toFixed(1)+'% sopra)';
-  document.getElementById('mReasons').innerHTML=info.reasons.map(r=>`<span class=reason>${{r}}</span>`).join(' ');
+  document.getElementById('mCoin').innerText=coin+' • $'+info.price.toFixed(2);
+  document.getElementById('mPrice').innerText=info.signal+' '+info.conf+'% • TF '+curTF;
+  const big=document.getElementById('mQualityBig');
+  big.className='big-box '+(info.quality_color=='entra'?'entra-big':info.quality_color=='quasi'?'quasi-big':'wait-big');
+  if(info.quality_color=='entra'){{
+    big.innerHTML=`<div style="font-size:22px;font-weight:800;color:${{info.signal=='COMPRA'?'#166534':'#991b1b'}}">${{info.quality_label}} - ${{info.signal}}</div><div style="font-size:14px;margin-top:6px">Puoi entrare con 1€ finto</div><div style="font-size:12px;color:#64748b;margin-top:4px">Affidabilità ${{info.quality_score}}% • SL $${{info.sl.toFixed(0)}} TP $${{info.tp.toFixed(0)}}</div>`;
+  }} else if(info.quality_color=='quasi'){{
+    big.innerHTML=`<div style="font-size:20px;font-weight:800;color:#92400e">⚠️ QUASI PRONTO</div><div style="font-size:13px;margin-top:6px">Manca poco, aspetta 15-30 min</div><div style="font-size:11px;color:#64748b">Score ${{info.quality_score}}%</div>`;
+  }} else {{
+    big.innerHTML=`<div style="font-size:20px;font-weight:800;color:#475569">⏳ ASPETTA</div><div style="font-size:13px;margin-top:6px">Non è il momento giusto, rischi di perdere</div><div style="font-size:11px;color:#64748b">Meglio aspettare ✅ ENTRA</div>`;
+  }}
+  document.getElementById('mSimpleText').innerText=info.quality_simple;
+  document.getElementById('mExpert').innerHTML=`RSI ${{info.rsi}} • EMA ${{info.ema50.toFixed(0)}}/${{info.ema200.toFixed(0)}} • Supertrend ${{info.st_trend==1?'🟢':'🔴'}} $${{info.st_val.toFixed(0)}} • Stoch K${{info.stoch_k}} • VWAP $${{info.vwap.toFixed(0)}} • Sup $${{info.support.toFixed(0)}} Res $${{info.resistance.toFixed(0)}} • ADX ${{info.adx}} Vol x${{info.vol_ratio}}`;
   document.getElementById('modal').classList.add('show');
-  loadChart(coin, curTF, info); loadBacktest(coin, curTF);
+  loadChart(coin, curTF); loadBacktest(coin, curTF);
 }}
-async function loadChart(coin, tf, info){{
+async function loadChart(coin, tf){{
   try{{
     const r=await fetch('/api/chart?coin='+coin+'&tf='+tf);const j=await r.json();if(!j.ok)return;
     const chartEl=document.getElementById('chart');chartEl.innerHTML='';
-    const c=LightweightCharts.createChart(chartEl,{{width:chartEl.clientWidth,height:200,layout:{{background:{{color:'#0f172a'}},textColor:'#94a3b8'}},grid:{{vertLines:{{color:'#1e293b'}},horzLines:{{color:'#1e293b'}}}},timeScale:{{timeVisible:true}}}});
-    const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({{time:d.time,open:d.open,high:d.high,low:d.low,close:d.close}})));
-    if(info && info.st_val){{
-      const stSeries=c.addLineSeries({{color: info.st_trend==1?'#22c55e':'#ef4444', lineWidth:2}});
-      // linea supertrend piatta per semplicità (ultimo valore)
-      const stData=j.data.map(d=>({{time:d.time, value: info.st_val}}));
-      stSeries.setData(stData);
-    }}
-    c.timeScale().fitContent();
+    const c=LightweightCharts.createChart(chartEl,{{width:chartEl.clientWidth,height:180,layout:{{background:{{color:'#0f172a'}},textColor:'#94a3b8'}},grid:{{vertLines:{{color:'#1e293b'}},horzLines:{{color:'#1e293b'}}}},timeScale:{{timeVisible:true}}}});
+    const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({{time:d.time,open:d.open,high:d.high,low:d.low,close:d.close}})));c.timeScale().fitContent();
   }}catch(e){{}}
 }}
 async function loadBacktest(coin, tf){{
   try{{
-    const elBig=document.getElementById('mWinRateBig');
-    elBig.style.display='block';
-    elBig.innerHTML='⏳ Calcolo WinRate V9 con nuovi filtri...';
-    const r=await fetch('/api/backtest?coin='+coin+'&tf='+tf+'&sens='+curSens);
-    const j=await r.json();
+    const r=await fetch('/api/backtest?coin='+coin+'&tf='+tf);const j=await r.json();
     const last20=j.last20_win||0;
-    const wr=j.win_rate||0;
-    const cls = last20>=60?'win-high':last20>=50?'win-mid':'win-low';
-    const total=j.total_signals||0;
-    const wins=j.wins||0;
-    elBig.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><div style="text-align:left"><b style="font-size:14px">📊 WINRATE V9 ${{tf}}</b><br><small style="color:#64748b">${{wins}}/${{total}} vinti • ${{wr}}% storico • con Supertrend+Stoch+VWAP</small></div><span class="win-badge ${{cls}}" style="font-size:16px">${{last20}}%</span></div><div style="margin-top:8px;display:flex;gap:3px;justify-content:center">${{(j.last20||[]).slice(0,12).map(x=>`<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${{x.win?'#22c55e':'#ef4444'}};border:1px solid white"></span>`).join('')}} </div><small style="color:#64748b">Ultimi 12 segnali V9: verde=win rosso=loss</small>`;
-    document.getElementById('mWinRate').innerHTML=`<span class="win-badge ${{cls}}">${{last20}}% win V9</span>`;
-  }}catch(e){{
-    document.getElementById('mWinRateBig').innerHTML='Errore winrate: '+e.message;
-  }}
+    const cls = last20>=60?'🟢 Buono':'🟡 Medio';
+    document.getElementById('mWinRateBig').innerHTML=`Ultimi 12 trade: ${{(j.last20||[]).map(x=>x.win?'🟢':'🔴').join('')}}<br>Negli ultimi test ha vinto il <b>${{last20}}%</b> delle volte ${{cls}}<br><small style="color:#64748b">${{j.wins}} vinti su ${{j.total_signals}} totali</small>`;
+  }}catch(e){{}}
 }}
 function closeModal(){{document.getElementById('modal').classList.remove('show')}}
-function openChart(){{if(!currentDetail)return;const map={{BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}};window.open('https://www.tradingview.com/chart/?symbol='+map[currentDetail]+'&interval='+curTF,'_blank');}}
-loadTF('1H'); setInterval(()=>{{loadTF(curTF);renderOpen();}},20000);
+loadTF('1H'); setInterval(()=>loadTF(curTF),30000);
 updatePaperBar();
-if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').then(()=>{{fetch('/api/ping').then(r=>r.json()).then(j=>{{document.getElementById('subStatus').innerText='Push: '+j.subs+' iscritti - V9';}})}});}}
 </script>
 </body></html>
 """
