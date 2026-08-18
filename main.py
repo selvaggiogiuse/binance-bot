@@ -61,7 +61,7 @@ def get_current_price(name):
     symbol = PAIRS.get(name, "BTCEUR")
     # 1 - Binance diretto
     try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
             return float(r.json()['price'])
     except:
@@ -69,16 +69,31 @@ def get_current_price(name):
     # 2 - Binance alternativo USDT
     try:
         alt = ALT_PAIRS.get(symbol, symbol)
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={alt}", timeout=5)
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={alt}", timeout=5, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
             return float(r.json()['price'])
     except:
         pass
-    # 3 - CoinGecko
+    # 3 - Kraken (molto stabile su Render)
+    try:
+        kraken_map = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "ORO": "PAXGUSD"}
+        kp = kraken_map.get(name, "XXBTZUSD")
+        r = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={kp}", timeout=6)
+        if r.status_code == 200:
+            j = r.json()
+            # prendi primo risultato
+            result = j.get("result", {})
+            if result:
+                first_key = list(result.keys())[0]
+                price_str = result[first_key]["c"][0]
+                return float(price_str)
+    except:
+        pass
+    # 4 - CoinGecko
     try:
         cg_id = COINGECKO_IDS.get(name)
         vs = "eur" if name != "ORO" else "usd"
-        r = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies={vs}", timeout=8)
+        r = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies={vs}", timeout=8, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
             j = r.json()
             if cg_id in j and vs in j[cg_id]:
@@ -121,25 +136,52 @@ def fetch_ohlc_with_fallback(name, interval, limit=200):
         ohlc = fetch_binance_klines(alt, interval, limit)
         if ohlc and len(ohlc) >= 30:
             return ohlc
-    # fallback sintetico basato su prezzo reale
+    # fallback sintetico REALISTICO - senza candela gigante
     price = get_current_price(name)
     if price is None:
-        price = 64000 if name == "BTC" else 1900 if name == "ETH" else 4400
+        # prova CoinGecko come ultima spiaggia prima del fisso
+        try:
+            cg_id = COINGECKO_IDS.get(name)
+            vs = "eur" if name != "ORO" else "usd"
+            r = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies={vs}", timeout=6)
+            if r.status_code == 200:
+                j = r.json()
+                price = float(j[cg_id][vs])
+        except:
+            pass
+        if price is None:
+            price = 64000 if name == "BTC" else 1900 if name == "ETH" else 4400
+
     ohlc = []
     now = int(time.time())
     sec = TF_SECONDS.get(interval, 3600)
-    base = price * 0.98
+    # genera un random walk che parte vicino al prezzo e ci arriva senza salto
+    current = price * 0.995
+    # piccola tendenza per evitare piatto
+    trend = random.uniform(-0.0002, 0.0002)
     for i in range(limit):
         t = now - (limit - i) * sec
-        open_p = base + random.uniform(-price*0.008, price*0.008)
-        close_p = open_p + random.uniform(-price*0.004, price*0.004)
-        high_p = max(open_p, close_p) + random.uniform(0, price*0.003)
-        low_p = min(open_p, close_p) - random.uniform(0, price*0.003)
+        # open = close precedente
+        open_p = current
+        # variazione piccola
+        change = random.uniform(-price*0.0025, price*0.0025) + (price*trend)
+        close_p = open_p + change
+        # avvicina gradualmente al prezzo finale negli ultimi 10
+        if i > limit - 10:
+            close_p = close_p * 0.7 + price * 0.3
+        high_p = max(open_p, close_p) + random.uniform(0, price*0.0012)
+        low_p = min(open_p, close_p) - random.uniform(0, price*0.0012)
         ohlc.append({"time": t, "open": open_p, "high": high_p, "low": low_p, "close": close_p, "volume": random.uniform(10, 100)})
-        base = close_p
+        current = close_p
+    # forza ultimo close = prezzo reale senza creare spike enorme
     ohlc[-1]["close"] = price
-    ohlc[-1]["high"] = max(ohlc[-1]["high"], price)
-    ohlc[-1]["low"] = min(ohlc[-1]["low"], price)
+    # aggiusta high/low ultimo per includere close ma senza allungare troppo
+    ohlc[-1]["high"] = max(ohlc[-1]["open"], price) + random.uniform(0, price*0.0008)
+    ohlc[-1]["low"] = min(ohlc[-1]["open"], price) - random.uniform(0, price*0.0008)
+    # se l'ultima candela sarebbe gigante (>3% del prezzo), riducila
+    prev_close = ohlc[-2]["close"] if len(ohlc)>=2 else price
+    if abs(price - prev_close) / price > 0.03:
+        ohlc[-1]["open"] = prev_close
     return ohlc
 
 def analyze_coin(name, tf):
@@ -367,7 +409,7 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 let curTF='1H';let lastData=null;let currentDetail=null;
 function getPaper(){try{return JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"pnl":0,"open":[],"closed":0}')}catch(e){return{balance:10,pnl:0,open:[],closed:0}}}
 function savePaper(p){localStorage.setItem('paperV10',JSON.stringify(p));updatePaperBar();renderOpen();}
-function updatePaperBar(){const p=getPaper();document.getElementById('paperBalance').innerText='EUR '+p.balance.toFixed(2);document.getElementById('paperPNL').innerText='EUR '+p.pnl.toFixed(3);document.getElementById('openCount').innerText=p.open.length+' aperti';}
+function updatePaperBar(){const p=getPaper();document.getElementById('paperBalance').innerText='EUR '+p.balance.toFixed(2);document.getElementById('paperPNL').innerText=p.pnl.toFixed(3);document.getElementById('openCount').innerText=p.open.length+' aperti';}
 function renderOpen(){const p=getPaper();const cont=document.getElementById('openTradesList');if(p.open.length===0){cont.innerHTML='';return;}let html='';p.open.forEach((t,idx)=>{let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;html+=`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px;margin:6px 0;font-size:12px;display:flex;justify-content:space-between"><div><b>${t.coin} ${t.side}</b> @ $${t.entry.toFixed(0)} - ${pnl>=0?'+':''}EUR ${pnl.toFixed(4)}</div><button onclick="closeTrade(${idx})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px">Chiudi</button></div>`;});cont.innerHTML=html;}
 function paperTrade(side){if(!currentDetail||!lastData)return;const info=lastData.coins[currentDetail];const p=getPaper();if(info.quality_color!='entra' && !confirm(`Attenzione dice ${info.quality_label}. Entri lo stesso?`))return;if(p.balance<1){alert('Saldo finito');return;}const trade={id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price};p.open.push(trade);p.balance-=1;savePaper(p);closeModal();}
 function closeTrade(idx){const p=getPaper();const t=p.open[idx];let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;p.balance+=1+pnl;p.pnl+=pnl;p.closed+=1;p.open.splice(idx,1);savePaper(p);}
