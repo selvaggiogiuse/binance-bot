@@ -163,18 +163,58 @@ def fetch_binance_klines(symbol, interval, limit=200):
         print(f"fetch klines error {symbol} {e}")
         return []
 
+
+def fetch_kraken_ohlc(name, interval_minutes=60, limit=200):
+    try:
+        kraken_map = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "ORO": "PAXGUSD"}
+        pair = kraken_map.get(name, "XXBTZUSD")
+        r = requests.get(f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={interval_minutes}", timeout=8, headers={"User-Agent":"Mozilla/5.0"})
+        if r.status_code != 200:
+            return []
+        j = r.json()
+        if "result" not in j:
+            return []
+        result = j["result"]
+        # result has pair key plus last
+        key = None
+        for k in result:
+            if k != "last":
+                key = k
+                break
+        if not key:
+            return []
+        data = result[key]
+        ohlc=[]
+        for c in data[-limit:]:
+            # c = [time, open, high, low, close, vwap, volume, count]
+            ohlc.append({"time": int(c[0]), "open": float(c[1]), "high": float(c[2]), "low": float(c[3]), "close": float(c[4]), "volume": float(c[6])})
+        return ohlc
+    except Exception as e:
+        print(f"kraken ohlc error {e}")
+        return []
+
+
 def fetch_ohlc_with_fallback(name, interval, limit=200):
     symbol = PAIRS.get(name, "BTCEUR")
-    # prova simbolo principale
+    # 1 - Binance principale
     ohlc = fetch_binance_klines(symbol, interval, limit)
     if ohlc and len(ohlc) >= 30:
         return ohlc
-    # prova alternativo
+    # 2 - Binance alternativo
     alt = ALT_PAIRS.get(symbol)
     if alt and alt != symbol:
         ohlc = fetch_binance_klines(alt, interval, limit)
         if ohlc and len(ohlc) >= 30:
             return ohlc
+    # 3 - Kraken OHLC (molto stabile su Render) - mappa intervallo
+    try:
+        interval_map = {"5m":5, "15m":15, "1h":60, "4h":240, "1d":1440}
+        km = interval_map.get(interval, 60)
+        ohlc = fetch_kraken_ohlc(name, km, limit)
+        if ohlc and len(ohlc) >= 30:
+            return ohlc
+    except:
+        pass
     # fallback sintetico REALISTICO - senza candela gigante
     price = get_current_price(name)
     if price is None:
