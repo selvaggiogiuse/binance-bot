@@ -465,7 +465,58 @@ async function loadBacktest(coin, tf){
   }catch(e){}
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}
+
+// --- REALTIME WEBSOCKET LIVE ---
+let ws = null;
+let wsPrices = {};
+function connectRealtime(){
+  try{
+    const url = 'wss://stream.binance.com:9443/ws/btceur@ticker/etheur@ticker/paxgusdt@ticker';
+    ws = new WebSocket(url);
+    ws.onopen = ()=>{ console.log('Realtime connesso'); };
+    ws.onmessage = (ev)=>{
+      try{
+        const msg = JSON.parse(ev.data);
+        if(!msg.s) return;
+        const price = parseFloat(msg.c);
+        if(msg.s==='BTCEUR') wsPrices['BTC']=price;
+        if(msg.s==='ETHEUR') wsPrices['ETH']=price;
+        if(msg.s==='PAXGUSDT') wsPrices['ORO']=price;
+        if(currentDetail && wsPrices[currentDetail]){
+          const el = document.getElementById('mCoin');
+          if(el) el.innerText = currentDetail+' - $'+wsPrices[currentDetail].toFixed(2);
+        }
+      }catch(e){}
+    };
+    ws.onclose = ()=>{ setTimeout(connectRealtime,3000); };
+    ws.onerror = ()=>{ try{ws.close();}catch(e){} };
+  }catch(e){}
+}
+setTimeout(connectRealtime,1000);
+setInterval(()=>{
+  if(!lastData || !lastData.coins) return;
+  let changed=false;
+  for(let k in wsPrices){
+    if(lastData.coins[k] && Math.abs(lastData.coins[k].price - wsPrices[k])>0.01){
+      lastData.coins[k].price = wsPrices[k];
+      changed=true;
+    }
+  }
+  if(changed){
+    let html='';
+    for(let [name,info] of Object.entries(lastData.coins)){
+      const icon=name=='BTC'?'btc':name=='ETH'?'eth':'oro';const ico=name=='BTC'?'B':name=='ETH'?'E':'Au';
+      const qBadge = qualityBadge(info);
+      const price = `$${info.price.toFixed(2)}`;
+      let actionText = info.quality_color=='entra' ? (info.signal=='COMPRA'?'Compra ora':'Vendi ora') : info.quality_color=='quasi' ? 'Quasi pronto' : 'Non fare nulla';
+      html+=`<div class=coin-row onclick="openDetails('${name}')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon ${icon}">${ico}</div><div><b style="font-size:16px">${name}</b> - ${price} <span style="font-size:10px;color:#22c55e">● LIVE</span><div style="font-size:12px;color:#64748b;margin-top:2px">${actionText}</div></div></div><div style="text-align:right">${qBadge}<div style="font-size:11px;color:#64748b;margin-top:4px">${info.signal} ${info.conf}%</div></div></div>`;
+    }
+    document.getElementById('coins').innerHTML=html;
+  }
+},2000);
+
 loadTF('1H'); setInterval(()=>loadTF(curTF),30000);
+
 updatePaperBar();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 </script>
