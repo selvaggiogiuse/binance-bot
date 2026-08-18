@@ -13,7 +13,27 @@ except:
 app = Flask(__name__)
 
 OHLC_CACHE = {}
+PRICE_CACHE_FILE = "/tmp/last_prices.json"
 CACHE_TTL = 30
+LAST_PRICE_CACHE = {}
+
+def load_last_prices():
+    try:
+        if os.path.exists(PRICE_CACHE_FILE):
+            with open(PRICE_CACHE_FILE,"r") as jf:
+                return json.load(jf)
+    except:
+        pass
+    return {}
+
+def save_last_prices(d):
+    try:
+        with open(PRICE_CACHE_FILE,"w") as jf:
+            json.dump(d,jf)
+    except:
+        pass
+
+LAST_PRICE_CACHE = load_last_prices()
 
 # Mappa simboli - ORO usa USDT perche PAXGEUR non esiste su Binance
 PAIRS = {"BTC": "BTCEUR", "ETH": "ETHEUR", "ORO": "PAXGUSDT"}
@@ -58,12 +78,16 @@ def rsi_calc(closes, period=14):
     return 100 - (100 / (1 + rs))
 
 def get_current_price(name):
+    global LAST_PRICE_CACHE
     symbol = PAIRS.get(name, "BTCEUR")
     # 1 - Binance diretto
     try:
         r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
-            return float(r.json()['price'])
+            p = float(r.json()['price'])
+            LAST_PRICE_CACHE[name]=p
+            save_last_prices(LAST_PRICE_CACHE)
+            return p
     except:
         pass
     # 2 - Binance alternativo USDT
@@ -71,22 +95,31 @@ def get_current_price(name):
         alt = ALT_PAIRS.get(symbol, symbol)
         r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={alt}", timeout=5, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
-            return float(r.json()['price'])
+            p = float(r.json()['price'])
+            # se USDT, converti in EUR appross con tasso 0.92 se serve
+            if name!="ORO" and alt.endswith("USDT"):
+                # lascia in USD per ora, ma meglio di nulla
+                pass
+            LAST_PRICE_CACHE[name]=p
+            save_last_prices(LAST_PRICE_CACHE)
+            return p
     except:
         pass
     # 3 - Kraken (molto stabile su Render)
     try:
         kraken_map = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "ORO": "PAXGUSD"}
         kp = kraken_map.get(name, "XXBTZUSD")
-        r = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={kp}", timeout=6)
+        r = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={kp}", timeout=6, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code == 200:
             j = r.json()
-            # prendi primo risultato
             result = j.get("result", {})
             if result:
                 first_key = list(result.keys())[0]
                 price_str = result[first_key]["c"][0]
-                return float(price_str)
+                p = float(price_str)
+                LAST_PRICE_CACHE[name]=p
+                save_last_prices(LAST_PRICE_CACHE)
+                return p
     except:
         pass
     # 4 - CoinGecko
@@ -97,9 +130,15 @@ def get_current_price(name):
         if r.status_code == 200:
             j = r.json()
             if cg_id in j and vs in j[cg_id]:
-                return float(j[cg_id][vs])
+                p = float(j[cg_id][vs])
+                LAST_PRICE_CACHE[name]=p
+                save_last_prices(LAST_PRICE_CACHE)
+                return p
     except:
         pass
+    # 5 - ultimo prezzo salvato
+    if name in LAST_PRICE_CACHE:
+        return LAST_PRICE_CACHE[name]
     return None
 
 def fetch_binance_klines(symbol, interval, limit=200):
@@ -192,6 +231,7 @@ def analyze_coin(name, tf):
     lows = [c["low"] for c in ohlc]
     if not closes:
         return None
+    # prezzo unico = ultima chiusura delle candele (stessa fonte del grafico)
     price = closes[-1]
     ema50 = ema_calc(closes, 50)
     ema200 = ema_calc(closes, 200) if len(closes) >= 200 else ema_calc(closes, 50)
@@ -449,12 +489,14 @@ async function openDetails(coin){
   document.getElementById('modal').classList.add('show');
   loadChart(coin, curTF); loadBacktest(coin, curTF);
 }
+let currentChart=null; let currentSeries=null;
 async function loadChart(coin, tf){
   try{
     const r=await fetch('/api/chart?coin='+coin+'&tf='+tf);const j=await r.json();if(!j.ok)return;
     const chartEl=document.getElementById('chart');chartEl.innerHTML='';
     const c=LightweightCharts.createChart(chartEl,{width:chartEl.clientWidth,height:180,layout:{background:{color:'#0f172a'},textColor:'#94a3b8'},grid:{vertLines:{color:'#1e293b'},horzLines:{color:'#1e293b'}},timeScale:{timeVisible:true}});
     const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close})));c.timeScale().fitContent();
+    currentChart=c; currentSeries=series;
   }catch(e){document.getElementById('chart').innerHTML='<div style="color:#94a3b8;padding:20px;text-align:center">Grafico non disponibile</div>';}
 }
 async function loadBacktest(coin, tf){
@@ -485,6 +527,15 @@ function connectRealtime(){
         if(currentDetail && wsPrices[currentDetail]){
           const el = document.getElementById('mCoin');
           if(el) el.innerText = currentDetail+' - $'+wsPrices[currentDetail].toFixed(2);
+          // aggiorna anche grafico live con stesso prezzo
+          if(currentSeries && lastData && lastData.coins[currentDetail]){
+            try{
+              const last = lastData.coins[currentDetail];
+              // aggiorna ultima candela del grafico
+              const now = Math.floor(Date.now()/1000);
+              currentSeries.update({time: now, open: last.open||last.price, high: Math.max(last.high||last.price, wsPrices[currentDetail]), low: Math.min(last.low||last.price, wsPrices[currentDetail]), close: wsPrices[currentDetail]});
+            }catch(e){}
+          }
         }
       }catch(e){}
     };
