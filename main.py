@@ -215,62 +215,47 @@ def fetch_ohlc_with_fallback(name, interval, limit=200):
             return ohlc
     except:
         pass
-    # fallback sintetico REALISTICO - senza candela gigante
-    price = get_current_price(name)
-    if price is None:
-        # prova CoinGecko come ultima spiaggia prima del fisso
-        try:
-            cg_id = COINGECKO_IDS.get(name)
-            vs = "eur" if name != "ORO" else "usd"
-            r = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies={vs}", timeout=6)
-            if r.status_code == 200:
-                j = r.json()
-                price = float(j[cg_id][vs])
-        except:
-            pass
-        if price is None:
-            price = 64000 if name == "BTC" else 1900 if name == "ETH" else 4400
-
-    ohlc = []
-    now = int(time.time())
-    sec = TF_SECONDS.get(interval, 3600)
-    # genera un random walk che parte vicino al prezzo e ci arriva senza salto
-    current = price * 0.995
-    # piccola tendenza per evitare piatto
-    trend = random.uniform(-0.0002, 0.0002)
-    for i in range(limit):
-        t = now - (limit - i) * sec
-        # open = close precedente
-        open_p = current
-        # variazione piccola
-        change = random.uniform(-price*0.0025, price*0.0025) + (price*trend)
-        close_p = open_p + change
-        # avvicina gradualmente al prezzo finale negli ultimi 10
-        if i > limit - 10:
-            close_p = close_p * 0.7 + price * 0.3
-        high_p = max(open_p, close_p) + random.uniform(0, price*0.0012)
-        low_p = min(open_p, close_p) - random.uniform(0, price*0.0012)
-        ohlc.append({"time": t, "open": open_p, "high": high_p, "low": low_p, "close": close_p, "volume": random.uniform(10, 100)})
-        current = close_p
-    # forza ultimo close = prezzo reale senza creare spike enorme
-    ohlc[-1]["close"] = price
-    # aggiusta high/low ultimo per includere close ma senza allungare troppo
-    ohlc[-1]["high"] = max(ohlc[-1]["open"], price) + random.uniform(0, price*0.0008)
-    ohlc[-1]["low"] = min(ohlc[-1]["open"], price) - random.uniform(0, price*0.0008)
-    # se l'ultima candela sarebbe gigante (>3% del prezzo), riducila
-    prev_close = ohlc[-2]["close"] if len(ohlc)>=2 else price
-    if abs(price - prev_close) / price > 0.03:
-        ohlc[-1]["open"] = prev_close
-    return ohlc
+    # NIENTE PIU' CANDELE FINTE - se non ho dati reali, ritorno vuoto
+    # cosi non crea quella riga rossa gigante da 64k a 55k
+    return []
 
 def analyze_coin(name, tf):
     interval = TF_MAP.get(tf, "1h")
     ohlc = fetch_ohlc_with_fallback(name, interval, 200)
+    if not ohlc or len(ohlc) < 20:
+        # se non ho candele reali, uso solo prezzo corrente reale
+        real_price = get_current_price(name)
+        if real_price is None:
+            return None
+        # creo indicatori finti ma coerenti col prezzo reale
+        return {
+            "price": real_price,
+            "signal": "ASPETTA",
+            "conf": 52,
+            "quality_color": "wait",
+            "quality_label": "ASPETTA",
+            "quality_score": 45,
+            "quality_simple": "Dati grafico in aggiornamento, prezzo live corretto",
+            "rsi": 50,
+            "ema50": real_price,
+            "ema200": real_price,
+            "st_trend": 0,
+            "st_val": real_price,
+            "stoch_k": 50,
+            "vwap": real_price,
+            "support": real_price*0.98,
+            "resistance": real_price*1.02,
+            "adx": 20,
+            "vol_ratio": 1.0,
+            "sl": real_price*0.97,
+            "tp": real_price*1.03,
+            "open": real_price,
+            "high": real_price,
+            "low": real_price
+        }
     closes = [c["close"] for c in ohlc]
     highs = [c["high"] for c in ohlc]
     lows = [c["low"] for c in ohlc]
-    if not closes:
-        return None
     # prezzo unico = ultima chiusura delle candele (stessa fonte del grafico)
     price = closes[-1]
     ema50 = ema_calc(closes, 50)
@@ -336,7 +321,7 @@ def analyze_coin(name, tf):
         "conf": int(conf),
         "quality_color": quality_color,
         "quality_label": quality_label,
-        "quality_score": int(score + 50),
+        "quality_score": int(min(92, max(20, score + 50))),
         "quality_simple": quality_simple,
         "rsi": int(rsi),
         "ema50": ema50,
@@ -535,7 +520,7 @@ async function loadChart(coin, tf){
     const r=await fetch('/api/chart?coin='+coin+'&tf='+tf);const j=await r.json();if(!j.ok)return;
     const chartEl=document.getElementById('chart');chartEl.innerHTML='';
     const c=LightweightCharts.createChart(chartEl,{width:chartEl.clientWidth,height:180,layout:{background:{color:'#0f172a'},textColor:'#94a3b8'},grid:{vertLines:{color:'#1e293b'},horzLines:{color:'#1e293b'}},timeScale:{timeVisible:true}});
-    const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close})));c.timeScale().fitContent();
+    if(!j.data || j.data.length < 10){ document.getElementById('chart').innerHTML='<div style="color:#94a3b8;padding:20px;text-align:center">Dati grafico in aggiornamento... prezzo live sopra corretto</div>'; return; } const series=c.addCandlestickSeries();series.setData(j.data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close})));c.timeScale().fitContent();
     currentChart=c; currentSeries=series;
   }catch(e){document.getElementById('chart').innerHTML='<div style="color:#94a3b8;padding:20px;text-align:center">Grafico non disponibile</div>';}
 }
