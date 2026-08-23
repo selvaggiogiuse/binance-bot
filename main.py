@@ -426,37 +426,9 @@ def app_page():
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PUSH V10 LITE</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js">
-// V30 - P/L stabile che non scompare al reload
-let _origUpdatePaperBar = window.updatePaperBar;
-window.updatePaperBar = function(){
-  try{
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"totalPNL":0,"open":[],"closed":[]}');
-    let openPNL = 0;
-    if(window.lastData && window.lastData.coins){
-      (p.open||[]).forEach(t=>{
-        let cur = window.lastData.coins[t.coin] ? window.lastData.coins[t.coin].price : t.entry;
-        let pnl = t.side==='COMPRA' ? (cur - t.entry)/t.entry * 0.5 : (t.entry - cur)/t.entry * 0.5;
-        openPNL += pnl;
-      });
-    }
-    let total = (p.totalPNL||0) + openPNL;
-    let bal = 10 + total;
-    let el1 = document.getElementById('paperPNL');
-    if(el1) el1.innerText = total.toFixed(4);
-    let el2 = document.getElementById('paperBalance');
-    if(el2) el2.innerText = 'EUR '+bal.toFixed(2);
-    let el3 = document.getElementById('openCount');
-    if(el3) el3.innerText = (p.open||[]).length + ' aperti';
-    // non azzerare se non ci sono dati ancora
-    if(window.lastData && (p.open||[]).length===0 && total===0){
-      // se hai storico chiuso, mostra quello
-      if(p.totalPNL && p.totalPNL!==0){
-        if(el1) el1.innerText = p.totalPNL.toFixed(4);
-        if(el2) el2.innerText = 'EUR '+(10+p.totalPNL).toFixed(2);
-      }
-    }
-  }catch(e){ console.log(e); }
-};
+// V30 - P/L stabile FIX V36 - usa getPaper unificato
+// (rimosso override duplicato, usa updatePaperBar definito sopra)
+
 
 
 // V32 - fallback grafico mercato da Binance se /api non risponde
@@ -518,36 +490,31 @@ window.REAL_CONFIG = {
   risk_per_trade: 0.02 // 2% del capitale
 };
 
+// getRealStats unified above - placeholder removed
+
 function getRealStats(){
   try{
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"closed":[]}');
+    let p = getPaper();
     let closed = p.closed||[];
-    if(closed.length===0) return {winrate:0, profitFactor:0, total:0, wins:0};
+    if(!Array.isArray(closed) || closed.length===0) return {winrate:0, profitFactor:0, total:0, wins:0, grossWin:0, grossLoss:0};
     let wins = closed.filter(t=> (t.pnl||0) > 0).length;
     let total = closed.length;
-    let grossWin = closed.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
-    let grossLoss = Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
+    let grossWin = closed.filter(t=>t.pnl>0).reduce((s,t)=>s+(t.pnl||0),0);
+    let grossLoss = Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+(t.pnl||0),0));
     let pf = grossLoss>0 ? grossWin/grossLoss : grossWin>0? 99 : 0;
     return {winrate: total>0? (wins/total*100) : 0, profitFactor: pf, total: total, wins: wins, grossWin: grossWin, grossLoss: grossLoss};
-  }catch(e){ return {winrate:0, profitFactor:0, total:0, wins:0}; }
+  }catch(e){ return {winrate:0, profitFactor:0, total:0, wins:0, grossWin:0, grossLoss:0}; }
 }
-
 function updateRealBar(){
   try{
     let s = getRealStats();
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"totalPNL":0}');
-    let netPNL = (p.totalPNL||0) - (s.total * 10 * window.REAL_CONFIG.commission); // commissioni stimate
-    let el = document.getElementById('paperPNL');
-    if(el){
-      // mostra netto con commissioni
-      el.innerText = netPNL.toFixed(4) + ' (netto)';
-      el.title = 'Lordo: '+(p.totalPNL||0).toFixed(4)+' - Commissioni: '+(s.total * 10 * window.REAL_CONFIG.commission).toFixed(4);
-    }
+    let p = getPaper();
+    let netPNL = p.totalPNL||0; // gia netto con commissioni da closeTrade
     let statsEl = document.getElementById('realStats');
     if(statsEl){
       statsEl.innerHTML = `WinRate: ${s.winrate.toFixed(1)}% (${s.wins}/${s.total}) | PF: ${s.profitFactor.toFixed(2)} | Netto: ${netPNL>=0?'+':''}EUR ${netPNL.toFixed(2)} | SL 2% TP 4%`;
     }
-  }catch(e){ console.log(e); }
+  }catch(e){ console.log('updateRealBar',e); }
 }
 
 // auto-close con SL/TP per simulare reale
@@ -661,12 +628,107 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 let curTF='1H';let lastData=null;let currentDetail=null;
 async function initPush(){ if(!('Notification' in window)) return; if(Notification.permission!=='granted'){ await Notification.requestPermission(); } if(Notification.permission==='granted'){ try{ console.log('push permessa'); }catch(e){} } }
 setTimeout(initPush, 2000);
-function getPaper(){try{return JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"pnl":0,"open":[],"closed":0}')}catch(e){return{balance:10,pnl:0,open:[],closed:0}}}
-function savePaper(p){localStorage.setItem('paperV10',JSON.stringify(p));updatePaperBar();renderOpen();}
-function updatePaperBar(){const p=getPaper();document.getElementById('paperBalance').innerText='EUR '+p.balance.toFixed(2);document.getElementById('paperPNL').innerText=p.pnl.toFixed(3);document.getElementById('openCount').innerText=p.open.length+' aperti';}
-function renderOpen(){const p=getPaper();const cont=document.getElementById('openTradesList');if(p.open.length===0){cont.innerHTML='';return;}let html='';p.open.forEach((t,idx)=>{let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;html+=`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px;margin:6px 0;font-size:12px;display:flex;justify-content:space-between"><div><b>${t.coin} ${t.side}</b> @ $${t.entry.toFixed(0)} - ${pnl>=0?'+':''}EUR ${pnl.toFixed(4)}</div><button onclick="closeTrade(${idx})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px">Chiudi</button></div>`;});cont.innerHTML=html;}
-function paperTrade(side){if(!currentDetail||!lastData)return;const info=lastData.coins[currentDetail];const p=getPaper();if(info.quality_color!='entra' && !confirm(`Attenzione dice ${info.quality_label}. Entri lo stesso?`))return;if(p.balance<1){alert('Saldo finito');return;}const trade={id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price};p.open.push(trade);p.balance-=1;savePaper(p);closeModal();}
-function closeTrade(idx){const p=getPaper();const t=p.open[idx];let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*1:(t.entry-curPrice)/t.entry*1;p.balance+=1+pnl;p.pnl+=pnl;p.closed+=1;p.open.splice(idx,1);savePaper(p);}
+function getPaper(){
+  try{
+    let raw = JSON.parse(localStorage.getItem('paperV10')||'{}');
+    // migrazione da vecchio formato
+    if(!raw.open) raw.open=[];
+    if(raw.closed===undefined) raw.closed=[];
+    if(typeof raw.closed==='number'){
+      // vecchio formato: closed era contatore
+      raw.closedCount = raw.closed;
+      raw.closed = [];
+    }
+    if(raw.totalPNL===undefined){
+      raw.totalPNL = (raw.pnl!==undefined ? raw.pnl : 0);
+    }
+    if(raw.pnl===undefined) raw.pnl = raw.totalPNL||0;
+    if(raw.balance===undefined) raw.balance = 10 + (raw.totalPNL||0);
+    if(!raw.history) raw.history=[10 + (raw.totalPNL||0)];
+    return raw;
+  }catch(e){
+    return {balance:10, totalPNL:0, pnl:0, open:[], closed:[], history:[10]};
+  }
+}
+function savePaper(p){
+  // normalizza prima di salvare
+  p.totalPNL = p.totalPNL||0;
+  p.pnl = p.totalPNL;
+  p.balance = 10 + p.totalPNL;
+  if(!Array.isArray(p.closed)) p.closed=[];
+  localStorage.setItem('paperV10', JSON.stringify(p));
+  updatePaperBar();
+  renderOpen();
+  updateRealBar();
+}
+function updatePaperBar(){
+  try{
+    const p=getPaper();
+    let openPNL=0;
+    if(window.lastData && window.lastData.coins){
+      (p.open||[]).forEach(t=>{
+        let cur = window.lastData.coins[t.coin] ? window.lastData.coins[t.coin].price : t.entry;
+        let amt = t.amount||1;
+        let pnlPct = t.side==='COMPRA' ? (cur - t.entry)/t.entry : (t.entry - cur)/t.entry;
+        openPNL += pnlPct*amt;
+      });
+    }
+    let total = (p.totalPNL||0) + openPNL;
+    let bal = 10 + total;
+    let el1=document.getElementById('paperBalance');
+    let el2=document.getElementById('paperPNL');
+    let el3=document.getElementById('openCount');
+    if(el1) el1.innerText='EUR '+bal.toFixed(2);
+    if(el2) el2.innerText= total.toFixed(4)+' (netto)';
+    if(el3) el3.innerText= (p.open||[]).length+' aperti - EUR '+bal.toFixed(2);
+  }catch(e){ console.log('updatePaperBar',e); }
+}
+function renderOpen(){
+  const p=getPaper();
+  const cont=document.getElementById('openTradesList');
+  if(!cont) return;
+  if(p.open.length===0){cont.innerHTML='';return;}
+  let html='';
+  p.open.forEach((t,idx)=>{
+    let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;
+    let pnl=t.side==='COMPRA'?(curPrice-t.entry)/t.entry*(t.amount||1):(t.entry-curPrice)/t.entry*(t.amount||1);
+    html+=`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px;margin:6px 0;font-size:12px;display:flex;justify-content:space-between"><div><b>${t.coin} ${t.side}</b> @ $${t.entry.toFixed(2)} - ${pnl>=0?'+':''}EUR ${pnl.toFixed(4)}</div><button onclick="closeTrade(${idx})" style="background:#0f172a;color:white;border:none;padding:6px 10px;border-radius:8px">Chiudi</button></div>`;
+  });
+  cont.innerHTML=html;
+}
+function paperTrade(side){
+  if(!currentDetail||!lastData) return;
+  const info=lastData.coins[currentDetail];
+  const p=getPaper();
+  if(info.quality_color!='entra' && !confirm(`Attenzione dice ${info.quality_label}. Entri lo stesso?`)) return;
+  if(p.balance<1 && (p.open||[]).length>=10){alert('Saldo finito');return;}
+  const trade={id:Date.now(),coin:currentDetail,side:side==='buy'?'COMPRA':'VENDI',entry:info.price, amount:1, time:Date.now()};
+  p.open.push(trade);
+  savePaper(p);
+  closeModal();
+}
+function closeTrade(idx){
+  const p=getPaper();
+  if(!p.open[idx]) return;
+  const t=p.open[idx];
+  let curPrice=lastData&&lastData.coins[t.coin]?lastData.coins[t.coin].price:t.entry;
+  let pnlPct=t.side==='COMPRA'?(curPrice-t.entry)/t.entry:(t.entry-curPrice)/t.entry;
+  let amt=t.amount||1;
+  let comm = window.REAL_CONFIG ? window.REAL_CONFIG.commission : 0.001;
+  let pnl = pnlPct*amt - amt*comm*2;
+  p.totalPNL = (p.totalPNL||0) + pnl;
+  p.pnl = p.totalPNL;
+  p.balance = 10 + p.totalPNL;
+  if(!Array.isArray(p.closed)) p.closed=[];
+  p.closed.push({coin:t.coin, entry:t.entry, exit:curPrice, side:t.side, pnl:pnl, time:Date.now(), reason:'MANUAL'});
+  p.history = p.history||[10];
+  p.history.push(10 + p.totalPNL);
+  p.open.splice(idx,1);
+  localStorage.setItem('paperV10', JSON.stringify(p));
+  updatePaperBar();
+  renderOpen();
+  updateRealBar();
+}
 function qualityBadge(info){let color = info.quality_color || 'wait'; let label = info.quality_label || 'ASPETTA'; if(color=='entra') return `<span class="badge badge-entra">${label}</span>`; if(color=='quasi') return `<span class="badge badge-quasi">${label}</span>`; return `<span class="badge badge-wait">${label}</span>`;}
 async function loadTF(tf){
   curTF=tf;
@@ -769,37 +831,9 @@ loadTF('1H'); setInterval(()=>loadTF(curTF),30000);
 updatePaperBar();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 
-// V30 - P/L stabile che non scompare al reload
-let _origUpdatePaperBar = window.updatePaperBar;
-window.updatePaperBar = function(){
-  try{
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"totalPNL":0,"open":[],"closed":[]}');
-    let openPNL = 0;
-    if(window.lastData && window.lastData.coins){
-      (p.open||[]).forEach(t=>{
-        let cur = window.lastData.coins[t.coin] ? window.lastData.coins[t.coin].price : t.entry;
-        let pnl = t.side==='COMPRA' ? (cur - t.entry)/t.entry * 0.5 : (t.entry - cur)/t.entry * 0.5;
-        openPNL += pnl;
-      });
-    }
-    let total = (p.totalPNL||0) + openPNL;
-    let bal = 10 + total;
-    let el1 = document.getElementById('paperPNL');
-    if(el1) el1.innerText = total.toFixed(4);
-    let el2 = document.getElementById('paperBalance');
-    if(el2) el2.innerText = 'EUR '+bal.toFixed(2);
-    let el3 = document.getElementById('openCount');
-    if(el3) el3.innerText = (p.open||[]).length + ' aperti';
-    // non azzerare se non ci sono dati ancora
-    if(window.lastData && (p.open||[]).length===0 && total===0){
-      // se hai storico chiuso, mostra quello
-      if(p.totalPNL && p.totalPNL!==0){
-        if(el1) el1.innerText = p.totalPNL.toFixed(4);
-        if(el2) el2.innerText = 'EUR '+(10+p.totalPNL).toFixed(2);
-      }
-    }
-  }catch(e){ console.log(e); }
-};
+// V30 - P/L stabile FIX V36 - usa getPaper unificato
+// (rimosso override duplicato, usa updatePaperBar definito sopra)
+
 
 
 // V32 - fallback grafico mercato da Binance se /api non risponde
@@ -861,36 +895,31 @@ window.REAL_CONFIG = {
   risk_per_trade: 0.02 // 2% del capitale
 };
 
+// getRealStats unified above - placeholder removed
+
 function getRealStats(){
   try{
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"closed":[]}');
+    let p = getPaper();
     let closed = p.closed||[];
-    if(closed.length===0) return {winrate:0, profitFactor:0, total:0, wins:0};
+    if(!Array.isArray(closed) || closed.length===0) return {winrate:0, profitFactor:0, total:0, wins:0, grossWin:0, grossLoss:0};
     let wins = closed.filter(t=> (t.pnl||0) > 0).length;
     let total = closed.length;
-    let grossWin = closed.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
-    let grossLoss = Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
+    let grossWin = closed.filter(t=>t.pnl>0).reduce((s,t)=>s+(t.pnl||0),0);
+    let grossLoss = Math.abs(closed.filter(t=>t.pnl<0).reduce((s,t)=>s+(t.pnl||0),0));
     let pf = grossLoss>0 ? grossWin/grossLoss : grossWin>0? 99 : 0;
     return {winrate: total>0? (wins/total*100) : 0, profitFactor: pf, total: total, wins: wins, grossWin: grossWin, grossLoss: grossLoss};
-  }catch(e){ return {winrate:0, profitFactor:0, total:0, wins:0}; }
+  }catch(e){ return {winrate:0, profitFactor:0, total:0, wins:0, grossWin:0, grossLoss:0}; }
 }
-
 function updateRealBar(){
   try{
     let s = getRealStats();
-    let p = JSON.parse(localStorage.getItem('paperV10')||'{"balance":10,"totalPNL":0}');
-    let netPNL = (p.totalPNL||0) - (s.total * 10 * window.REAL_CONFIG.commission); // commissioni stimate
-    let el = document.getElementById('paperPNL');
-    if(el){
-      // mostra netto con commissioni
-      el.innerText = netPNL.toFixed(4) + ' (netto)';
-      el.title = 'Lordo: '+(p.totalPNL||0).toFixed(4)+' - Commissioni: '+(s.total * 10 * window.REAL_CONFIG.commission).toFixed(4);
-    }
+    let p = getPaper();
+    let netPNL = p.totalPNL||0; // gia netto con commissioni da closeTrade
     let statsEl = document.getElementById('realStats');
     if(statsEl){
       statsEl.innerHTML = `WinRate: ${s.winrate.toFixed(1)}% (${s.wins}/${s.total}) | PF: ${s.profitFactor.toFixed(2)} | Netto: ${netPNL>=0?'+':''}EUR ${netPNL.toFixed(2)} | SL 2% TP 4%`;
     }
-  }catch(e){ console.log(e); }
+  }catch(e){ console.log('updateRealBar',e); }
 }
 
 // auto-close con SL/TP per simulare reale
@@ -940,3 +969,4 @@ window.updatePaperBar = function(){
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
+
