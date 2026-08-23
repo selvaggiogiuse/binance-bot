@@ -744,31 +744,8 @@ async function loadTF(tf){
       let actionText = info.quality_color=='entra' ? (info.signal=='COMPRA'?'Compra ora':'Vendi ora') : info.quality_color=='quasi' ? 'Quasi pronto' : 'Non fare nulla';
       html+=`<div class=coin-row onclick="openDetails('${name}')" style="cursor:pointer;touch-action:manipulation"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon ${icon}">${ico}</div><div><b style="font-size:16px">${name}</b> - ${price}<div style="font-size:12px;color:#64748b;margin-top:2px">${actionText}</div></div></div><div style="text-align:right">${qBadge}<div style="font-size:11px;color:#64748b;margin-top:4px">${info.signal} ${info.conf}%</div></div></div>`;
     }
-    // V24 - differenzia se tutti alti
     try{
-      if(lastData && lastData.coins){
-        let entries = Object.entries(lastData.coins).sort((a,b)=> b[1].conf - a[1].conf);
-        if(entries.length >= 3 && entries[0][1].conf >= 75){
-          entries[0][1].conf = 84; entries[0][1].quality_score = 84;
-          entries[1][1].conf = Math.max(70, Math.min(78, entries[1][1].conf - 6)); entries[1][1].quality_score = entries[1][1].conf;
-          entries[2][1].conf = Math.max(58, Math.min(70, entries[2][1].conf - 14)); entries[2][1].quality_score = entries[2][1].conf;
-          if(entries[2][1].conf < 67){ entries[2][1].signal = "ASPETTA"; entries[2][1].quality_color = "wait"; }
-          let newCoins = {}; for(let [k,v] of entries) newCoins[k]=v; lastData.coins = newCoins;
-          // rigenera html con tf corretto
-          let html2 = "";
-          for(let [name, info] of Object.entries(lastData.coins)){
-            let col = info.quality_color==='entra' ? '#22c55e' : '#eab308';
-            let lbl = info.signal;
-            let tfL = tf || '1H';
-            html2 += `<div onclick="openDetails('${name}')" style="padding:12px;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center;cursor:pointer"><div><b>${name}</b> - $${info.price.toFixed(2)}<br><small style="color:#94a3b8"></small></div><div style="text-align:right"><span style="background:${col};color:white;padding:4px 10px;border-radius:12px;font-weight:bold;font-size:13px">${lbl} ${Math.round(info.conf)}%</span><br><small style="color:#94a3b8">TF ${tfL}</small></div></div>`;
-          }
-          document.getElementById('coins').innerHTML=html2;
-        } else {
-          document.getElementById('coins').innerHTML=html;
-        }
-      } else {
-        document.getElementById('coins').innerHTML=html;
-      }
+      document.getElementById('coins').innerHTML=html;
     }catch(e){ document.getElementById('coins').innerHTML=html; }
     // PUSH + SUONO quando ENTRA 90%
     try{
