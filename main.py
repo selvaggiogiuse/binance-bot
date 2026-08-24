@@ -32,7 +32,7 @@ PAIRS = {"BTC": "BTCEUR", "ETH": "ETHEUR", "ORO": "PAXGUSDT"}
 ALT_PAIRS = {"BTCEUR": "BTCUSDT", "ETHEUR": "ETHUSDT", "PAXGUSDT": "PAXGUSDT"}
 COINGECKO_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "ORO": "pax-gold"}
 TF_MAP = {"5m": "5m", "15m": "15m", "1H": "1h", "4H": "4h", "1D": "1d"}
-VERSION = "V50 - LISTA PULITA FIXATA + LOGO - 23/08/2026"
+VERSION = "V51 - PREZZO REAL-TIME + FULL STATS - 23/08/2026"
 LOGO_DATA_URI = "data:image/png;base64,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"
 
 def ema_calc(data, period):
@@ -125,24 +125,28 @@ def fetch_ohlc_with_fallback(name, interval, limit=200):
 
 def analyze_coin(name, tf):
     interval=TF_MAP.get(tf,"1h")
+    # 1 - Prezzo REAL-TIME per display (ticker live)
+    real_price = get_current_price(name)
+    # 2 - OHLC per indicatori
     ohlc=fetch_ohlc_with_fallback(name,interval,200)
     if not ohlc or len(ohlc)<20:
-        real_price=get_current_price(name)
         if real_price is None: return None
-        return {"price":real_price,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":"Dati grafico in aggiornamento, prezzo live corretto","rsi":50,"ema50":real_price,"ema200":real_price,"st_trend":0,"st_val":real_price,"stoch_k":50,"vwap":real_price,"support":real_price*0.98,"resistance":real_price*1.02,"adx":20,"vol_ratio":1.0,"sl":real_price*0.97,"tp":real_price*1.03}
+        return {"price":real_price,"real_price":real_price,"close_price":real_price,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":"Dati grafico in aggiornamento, prezzo live corretto","rsi":50,"ema50":real_price,"ema200":real_price,"st_trend":0,"st_val":real_price,"stoch_k":50,"vwap":real_price,"support":real_price*0.98,"resistance":real_price*1.02,"adx":20,"vol_ratio":1.0,"sl":real_price*0.97,"tp":real_price*1.03}
     closes=[c["close"] for c in ohlc]; highs=[c["high"] for c in ohlc]; lows=[c["low"] for c in ohlc]
-    price=closes[-1]
+    close_price=closes[-1]
+    # Usa prezzo real-time se disponibile, altrimenti close
+    price = real_price if real_price is not None else close_price
     ema50=ema_calc(closes,50); ema200=ema_calc(closes,200) if len(closes)>=200 else ema_calc(closes,50)
     rsi=rsi_calc(closes,14)
     support=min(lows[-20:]) if len(lows)>=20 else min(lows)
     resistance=max(highs[-20:]) if len(highs)>=20 else max(highs)
     vwap=sum(closes[-20:])/20 if len(closes)>=20 else sum(closes)/len(closes)
-    st_trend=1 if price>ema50 else -1; st_val=ema50
+    st_trend=1 if close_price>ema50 else -1; st_val=ema50
     try:
         low_min=min(lows[-14:]); high_max=max(highs[-14:])
-        stoch_k=int((price-low_min)/(high_max-low_min)*100) if high_max!=low_min else 50
+        stoch_k=int((close_price-low_min)/(high_max-low_min)*100) if high_max!=low_min else 50
     except: stoch_k=50
-    adx=20+int(abs(price-ema50)/price*1000)%30
+    adx=20+int(abs(close_price-ema50)/close_price*1000)%30 if close_price else 20
     vol_ratio=round(0.8+(rsi%10)/10,1)
 
     points=0; max_points=0
@@ -154,8 +158,8 @@ def analyze_coin(name, tf):
     elif rsi>80: points+=2
     else: points+=2
     max_points+=20
-    if price>ema50: points+=10
-    if price>ema200: points+=5
+    if close_price>ema50: points+=10
+    if close_price>ema200: points+=5
     if ema50>ema200: points+=5
     max_points+=15
     if st_trend==1: points+=15
@@ -166,14 +170,14 @@ def analyze_coin(name, tf):
     elif stoch_k>85: points+=1
     else: points+=2
     max_points+=10
-    if price>vwap:
-        dist=(price-vwap)/vwap*100
+    if close_price>vwap:
+        dist=(close_price-vwap)/vwap*100
         if 0<dist<1.5: points+=10
         elif dist<3: points+=6
         else: points+=3
     max_points+=10
-    dist_sup=(price-support)/price*100 if price>0 else 0
-    dist_res=(resistance-price)/price*100 if price>0 else 0
+    dist_sup=(close_price-support)/close_price*100 if close_price>0 else 0
+    dist_res=(resistance-close_price)/close_price*100 if close_price>0 else 0
     if 1<dist_sup<4 and dist_res>1.5: points+=10
     elif dist_sup<6 and dist_res>1: points+=6
     else: points+=2
@@ -190,24 +194,24 @@ def analyze_coin(name, tf):
     conf=int(points/max_points*100) if max_points>0 else 50
     conf=max(20,min(92,conf))
 
-    if conf>=65 and st_trend==1 and price>ema50:
+    if conf>=65 and st_trend==1 and close_price>ema50:
         signal="COMPRA"; quality_color="entra" if conf>=75 else "quasi"; quality_label="ENTRA" if conf>=75 else "QUASI PRONTO"
-        quality_simple=f"FULL STATS: RSI{int(rsi)} EMA{int(ema50)}/{int(ema200)} ST{'UP' if st_trend==1 else 'DOWN'} Stoch{stoch_k} VWAP{int(vwap)} Sup{int(support)} Res{int(resistance)} ADX{adx} Volx{vol_ratio} = {points}/{max_points} -> {conf}%"
+        quality_simple=f"FULL STATS LIVE: prezzo ${price:.2f} (close ${close_price:.2f}) RSI{int(rsi)} EMA{int(ema50)}/{int(ema200)} ST{'UP' if st_trend==1 else 'DOWN'} Stoch{stoch_k} VWAP{int(vwap)} Sup{int(support)} Res{int(resistance)} ADX{adx} Volx{vol_ratio} = {points}/{max_points} -> {conf}%"
     elif conf<=40 and st_trend==-1:
         signal="VENDI"; quality_color="entra" if conf>=60 else "quasi"; quality_label="ENTRA" if conf>=60 else "QUASI PRONTO"
-        quality_simple=f"FULL STATS ribasso: RSI{int(rsi)} Stoch{stoch_k} ADX{adx} = {conf}%"
+        quality_simple=f"FULL STATS ribasso LIVE: prezzo ${price:.2f} RSI{int(rsi)} Stoch{stoch_k} ADX{adx} = {conf}%"
     else:
         if conf>=65:
-            signal="COMPRA"; quality_color="quasi"; quality_label="QUASI PRONTO"; quality_simple=f"FULL STATS {points}/{max_points} ({conf}%) quasi pronto TF {tf}"
+            signal="COMPRA"; quality_color="quasi"; quality_label="QUASI PRONTO"; quality_simple=f"FULL STATS LIVE {points}/{max_points} ({conf}%) quasi pronto TF {tf} prezzo ${price:.2f}"
         else:
-            signal="ASPETTA"; quality_color="wait"; quality_label="ASPETTA"; quality_simple=f"FULL STATS {conf}% da RSI EMA ST Stoch VWAP Sup/Res ADX Vol = {points}/{max_points} - TF {tf}"
+            signal="ASPETTA"; quality_color="wait"; quality_label="ASPETTA"; quality_simple=f"FULL STATS LIVE {conf}% prezzo ${price:.2f} da RSI EMA ST Stoch VWAP Sup/Res ADX Vol = {points}/{max_points} - TF {tf}"
 
     sl=price*0.98 if signal=="COMPRA" else price*1.02
     tp=price*1.04 if signal=="COMPRA" else price*0.96
-    return {"price":price,"signal":signal,"conf":int(conf),"quality_color":quality_color,"quality_label":quality_label,"quality_score":int(conf),"quality_simple":quality_simple,"rsi":int(rsi),"ema50":ema50,"ema200":ema200,"st_trend":st_trend,"st_val":st_val,"stoch_k":stoch_k,"vwap":vwap,"support":support,"resistance":resistance,"adx":adx,"vol_ratio":vol_ratio,"sl":sl,"tp":tp}
+    return {"price":price,"real_price":price,"close_price":close_price,"signal":signal,"conf":int(conf),"quality_color":quality_color,"quality_label":quality_label,"quality_score":int(conf),"quality_simple":quality_simple,"rsi":int(rsi),"ema50":ema50,"ema200":ema200,"st_trend":st_trend,"st_val":st_val,"stoch_k":stoch_k,"vwap":vwap,"support":support,"resistance":resistance,"adx":adx,"vol_ratio":vol_ratio,"sl":sl,"tp":tp}
 
 @app.route("/")
-def home(): return Response("Bot vivo V50 fixato", mimetype="text/plain; charset=utf-8")
+def home(): return Response("Bot vivo V51 real-time", mimetype="text/plain; charset=utf-8")
 
 @app.route("/api/signals")
 def api_signals():
@@ -216,7 +220,7 @@ def api_signals():
     for name in PAIRS.keys():
         data=analyze_coin(name,tf)
         if data is None:
-            data={"price":64000 if name=="BTC" else 1900 if name=="ETH" else 4400,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":"Dati temporanei","rsi":50,"ema50":0,"ema200":0,"st_trend":0,"st_val":0,"stoch_k":50,"vwap":0,"support":0,"resistance":0,"adx":20,"vol_ratio":1.0,"sl":0,"tp":0}
+            data={"price":64000 if name=="BTC" else 1900 if name=="ETH" else 4400,"real_price":64000,"close_price":64000,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":"Dati temporanei","rsi":50,"ema50":0,"ema200":0,"st_trend":0,"st_val":0,"stoch_k":50,"vwap":0,"support":0,"resistance":0,"adx":20,"vol_ratio":1.0,"sl":0,"tp":0}
         result[name]=data
     return jsonify({"ok":True,"tf":tf,"coins":result,"time":rome_now().isoformat(),"version":VERSION})
 
@@ -242,7 +246,7 @@ def app_page():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V50</title>
+<title>VENDI V51</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
@@ -268,14 +272,16 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 .entra-big{background:#dcfce7;border:1px solid #86efac}
 .quasi-big{background:#fef3c7;border:1px solid #fcd34d}
 .wait-big{background:#f1f5f9;border:1px solid #e2e8f0}
+.live-dot{width:8px;height:8px;background:#22c55e;border-radius:50%;display:inline-block;animation:pulse 1.5s infinite}
+@keyframes pulse{0%{opacity:1}50%{opacity:0.3}100%{opacity:1}}
 </style>
 </head>
 <body>
 <div class="header">
 <div class="logo-img">VEND</div>
 <div>
-<div style="font-weight:800;font-size:16px">VENDI - PUSH V10 LITE - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V50</span></div>
-<div style="font-size:12px;opacity:0.8">FULL STATS + GRAFICO - Lista Pulita Fixata</div>
+<div style="font-weight:800;font-size:16px">VENDI - PUSH V10 LITE - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V51</span> <span class="live-dot"></span> <span style="font-size:10px;background:#22c55e;color:white;padding:2px 6px;border-radius:10px">LIVE</span></div>
+<div style="font-size:12px;opacity:0.8">Prezzo Real-Time + FULL STATS + Grafico</div>
 </div>
 </div>
 <div class="tfs">
@@ -315,7 +321,7 @@ async function loadTF(tf){
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(function(b){b.classList.remove('active');});
   var el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center">Carico V50 TF='+tf+'...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center">Carico V51 LIVE TF='+tf+'...</div>';
   try{
     var res=await fetch('/api/signals?tf='+tf);
     if(!res.ok) throw new Error('HTTP '+res.status);
@@ -328,8 +334,9 @@ async function loadTF(tf){
       var ico=name=='BTC'?'B':name=='ETH'?'E':'Au';
       var qBadge=qualityBadge(info);
       var price='$'+info.price.toFixed(2);
+      var liveTag = info.real_price ? '<span style="font-size:8px;color:#22c55e;margin-left:4px">● LIVE</span>' : '';
       var actionText=info.quality_color=='entra' ? (info.signal=='COMPRA'?'Compra ora':'Vendi ora') : info.quality_color=='quasi' ? 'Quasi pronto' : 'Non fare nulla';
-      html+='<div class="coin-row" onclick="openDetails(\\''+name+'\\')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon '+iconClass+'">'+ico+'</div><div><b style="font-size:16px">'+name+'</b> - '+price+'<div style="font-size:12px;color:#64748b;margin-top:2px">'+actionText+'</div></div></div><div style="text-align:right">'+qBadge+'<div style="font-size:11px;color:#64748b;margin-top:4px">'+info.signal+' '+info.conf+'%</div></div></div>';
+      html+='<div class="coin-row" onclick="openDetails(\\''+name+'\\')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon '+iconClass+'">'+ico+'</div><div><b style="font-size:16px">'+name+'</b> - '+price+liveTag+'<div style="font-size:12px;color:#64748b;margin-top:2px">'+actionText+'</div></div></div><div style="text-align:right">'+qBadge+'<div style="font-size:11px;color:#64748b;margin-top:4px">'+info.signal+' '+info.conf+'%</div></div></div>';
     }
     document.getElementById('coins').innerHTML=html;
   }catch(e){
@@ -341,19 +348,19 @@ async function openDetails(coin){
   var info=lastData.coins[coin];
   if(!info) return;
   currentDetail=coin;
-  document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2);
-  document.getElementById('mPrice').textContent=info.signal+' '+info.conf+'% - TF '+curTF;
+  document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2)+' ● LIVE (close $'+info.close_price.toFixed(2)+')';
+  document.getElementById('mPrice').textContent=info.signal+' '+info.conf+'% - TF '+curTF+' - LIVE';
   var big=document.getElementById('mQualityBig');
   big.className='big-box '+(info.quality_color=='entra'?'entra-big':info.quality_color=='quasi'?'quasi-big':'wait-big');
   if(info.quality_color=='entra'){
-    big.innerHTML='<div style="font-size:22px;font-weight:800;color:'+(info.signal=='COMPRA'?'#166534':'#991b1b')+'">'+info.quality_label+' - '+info.signal+'</div><div style="font-size:14px;margin-top:6px">Segnale attivo</div><div style="font-size:12px;color:#64748b;margin-top:4px">Score '+info.quality_score+'% - SL $'+info.sl.toFixed(0)+' TP $'+info.tp.toFixed(0)+'</div>';
+    big.innerHTML='<div style="font-size:22px;font-weight:800;color:'+(info.signal=='COMPRA'?'#166534':'#991b1b')+'">'+info.quality_label+' - '+info.signal+'</div><div style="font-size:14px;margin-top:6px">Segnale attivo - Prezzo LIVE</div><div style="font-size:12px;color:#64748b;margin-top:4px">Score '+info.quality_score+'% - SL $'+info.sl.toFixed(0)+' TP $'+info.tp.toFixed(0)+'</div>';
   }else if(info.quality_color=='quasi'){
     big.innerHTML='<div style="font-size:20px;font-weight:800;color:#92400e">QUASI PRONTO</div><div style="font-size:13px;margin-top:6px">Manca poco, aspetta 15-30 min</div><div style="font-size:11px;color:#64748b">Score '+info.quality_score+'%</div>';
   }else{
     big.innerHTML='<div style="font-size:20px;font-weight:800;color:#475569">ASPETTA</div><div style="font-size:13px;margin-top:6px">Non e\\' il momento giusto</div>';
   }
   document.getElementById('mSimpleText').textContent=info.quality_simple;
-  document.getElementById('mExpert').innerHTML='RSI '+info.rsi+' - EMA '+info.ema50.toFixed(0)+'/'+info.ema200.toFixed(0)+' - Supertrend '+(info.st_trend==1?'UP':'DOWN')+' $'+info.st_val.toFixed(0)+' - Stoch K'+info.stoch_k+' - VWAP $'+info.vwap.toFixed(0)+' - Sup $'+info.support.toFixed(0)+' Res $'+info.resistance.toFixed(0)+' - ADX '+info.adx+' Vol x'+info.vol_ratio;
+  document.getElementById('mExpert').innerHTML='LIVE $'+info.price.toFixed(2)+' (close $'+info.close_price.toFixed(2)+') - RSI '+info.rsi+' - EMA '+info.ema50.toFixed(0)+'/'+info.ema200.toFixed(0)+' - Supertrend '+(info.st_trend==1?'UP':'DOWN')+' $'+info.st_val.toFixed(0)+' - Stoch K'+info.stoch_k+' - VWAP $'+info.vwap.toFixed(0)+' - Sup $'+info.support.toFixed(0)+' Res $'+info.resistance.toFixed(0)+' - ADX '+info.adx+' Vol x'+info.vol_ratio;
   document.getElementById('modal').classList.add('show');
   loadChart(coin,curTF);
   loadBacktest(coin,curTF);
@@ -384,6 +391,7 @@ async function loadBacktest(coin,tf){
 }
 
 loadTF('1H');
+setInterval(function(){loadTF(curTF);}, 30000);
 if('serviceWorker' in navigator){
   navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister();});});
 }
