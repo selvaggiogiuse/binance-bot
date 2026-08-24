@@ -32,7 +32,7 @@ PAIRS = {"BTC": "BTCEUR", "ETH": "ETHEUR", "ORO": "PAXGUSDT"}
 ALT_PAIRS = {"BTCEUR": "BTCUSDT", "ETHEUR": "ETHUSDT", "PAXGUSDT": "PAXGUSDT"}
 COINGECKO_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "ORO": "pax-gold"}
 TF_MAP = {"5m": "5m", "15m": "15m", "1H": "1h", "4H": "4h", "1D": "1d"}
-VERSION = "V47 - FULL STATS + GRAFICO SENZA PAPER - 23/08/2026"
+VERSION = "V48 - FIX LOGO + BADGE + LIST PULITA - 23/08/2026"
 LOGO_DATA_URI = "data:image/png;base64,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"
 
 def ema_calc(data, period):
@@ -249,7 +249,7 @@ def app_page():
 body{margin:0;background:#f8fafc;color:#0f172a}
 .header{background:linear-gradient(135deg,#0f172a,#1e3a8a);color:white;padding:14px 16px;display:flex;align-items:center;gap:12px}
 .logo-img{width:52px;height:52px;border-radius:12px}
-.badge{padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.badge{padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap;display:inline-block;max-width:110px;text-align:center;line-height:1.2}
 .badge-entra{background:#dcfce7;color:#166534;border:1px solid #86efac}
 .badge-quasi{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
 .badge-wait{background:#e2e8f0;color:#475569}
@@ -272,10 +272,10 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 </head>
 <body>
 <div class="header">
-<img src="__LOGO__" class="logo-img" alt="logo">
+<img src="__LOGO__" class="logo-img" alt="€" onerror="this.style.display='none'">
 <div>
-<div style="font-weight:800;font-size:16px">VENDI - PUSH V10 LITE - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V47</span></div>
-<div style="font-size:12px;opacity:0.8">FULL STATS + GRAFICO - Senza Paper Trading</div>
+<div style="font-weight:800;font-size:16px">VENDI - PUSH V10 LITE - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V48</span></div>
+<div style="font-size:12px;opacity:0.8">FULL STATS + GRAFICO - Lista Pulita</div>
 </div>
 </div>
 <div class="tfs">
@@ -329,7 +329,7 @@ async function loadTF(tf){
       var qBadge=qualityBadge(info);
       var price='$'+info.price.toFixed(2);
       var actionText=info.quality_color=='entra' ? (info.signal=='COMPRA'?'Compra ora':'Vendi ora') : info.quality_color=='quasi' ? 'Quasi pronto' : 'Non fare nulla';
-      html+='<div class="coin-row" onclick="openDetails(\\''+name+'\\')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon '+iconClass+'">'+ico+'</div><div><b style="font-size:16px">'+name+'</b> - '+price+'<div style="font-size:12px;color:#64748b;margin-top:2px">'+actionText+'</div><div style="font-size:10px;color:#94a3b8">'+(info.quality_simple||'')+'</div></div></div><div style="text-align:right">'+qBadge+'<div style="font-size:11px;color:#64748b;margin-top:4px">'+info.signal+' '+info.conf+'%</div></div></div>';
+      html+='<div class="coin-row" onclick="openDetails(\''+name+'\')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon '+iconClass+'">'+ico+'</div><div><b style="font-size:16px">'+name+'</b> - '+price+'<div style="font-size:12px;color:#64748b;margin-top:2px">'+actionText+'</div></div></div><div style="text-align:right">'+qBadge+'<div style="font-size:11px;color:#64748b;margin-top:4px">'+info.signal+' '+info.conf+'%</div></div></div>';
     }
     document.getElementById('coins').innerHTML=html;
   }catch(e){
@@ -395,4 +395,3 @@ if('serviceWorker' in navigator){
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
-
