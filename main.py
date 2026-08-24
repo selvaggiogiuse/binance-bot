@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, jsonify, Response, request
-import os, requests, time, math, json, random
+import os, requests, json, random
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -12,11 +12,11 @@ except:
 
 app = Flask(__name__)
 
-# V52 - FORZATO SU USDT per matchare TradingView 1:1
-PAIRS_LIVE = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}  # prezzo live identico a TradingView
+# V53 - SOLO STATISTICHE, NO GRAFICO
+PAIRS_LIVE = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
 PAIRS_OHLC = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
 TF_MAP = {"5m": "5m", "15m": "15m", "1H": "1h", "4H": "4h", "1D": "1d"}
-VERSION = "V52 - FORZATO USDT = TRADINGVIEW - 23/08/2026"
+VERSION = "V53 - SOLO STATS SENZA GRAFICO - 23/08/2026"
 
 def ema_calc(data, period):
     if not data: return 0
@@ -38,16 +38,13 @@ def rsi_calc(closes, period=14):
     return 100-(100/(1+rs))
 
 def get_live_price_ticker(name):
-    """Prezzo LIVE senza cache - identico a TradingView BINANCE:BTCUSDT"""
     symbol=PAIRS_LIVE.get(name,"BTCUSDT")
     try:
-        # Chiamata diretta senza cache file
         r=requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",timeout=4,headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code==200:
             return float(r.json()['price']), f"BINANCE:{symbol}"
     except: pass
     try:
-        # Fallback Kraken solo se Binance down
         kraken_map={"BTC":"XXBTZUSD","ETH":"XETHZUSD","ORO":"PAXGUSD"}
         kp=kraken_map.get(name,"XXBTZUSD")
         r=requests.get(f"https://api.kraken.com/0/public/Ticker?pair={kp}",timeout=5)
@@ -77,7 +74,7 @@ def analyze_coin(name, tf):
     ohlc=fetch_binance_klines(PAIRS_OHLC.get(name,"BTCUSDT"),interval,200)
     if not ohlc or len(ohlc)<20:
         if live_price is None: return None
-        return {"price":live_price,"real_price":live_price,"close_price":live_price,"source":source,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":f"Prezzo da {source} LIVE - candele in aggiornamento","rsi":50,"ema50":live_price,"ema200":live_price,"st_trend":0,"st_val":live_price,"stoch_k":50,"vwap":live_price,"support":live_price*0.98,"resistance":live_price*1.02,"adx":20,"vol_ratio":1.0,"sl":live_price*0.97,"tp":live_price*1.03}
+        return {"price":live_price,"real_price":live_price,"close_price":live_price,"source":source,"signal":"ASPETTA","conf":52,"quality_color":"wait","quality_label":"ASPETTA","quality_score":45,"quality_simple":f"Prezzo da {source} LIVE","rsi":50,"ema50":live_price,"ema200":live_price,"st_trend":0,"st_val":live_price,"stoch_k":50,"vwap":live_price,"support":live_price*0.98,"resistance":live_price*1.02,"adx":20,"vol_ratio":1.0,"sl":live_price*0.97,"tp":live_price*1.03}
     closes=[c["close"] for c in ohlc]; highs=[c["high"] for c in ohlc]; lows=[c["low"] for c in ohlc]
     close_price=closes[-1]
     price = live_price if live_price is not None else close_price
@@ -139,7 +136,7 @@ def analyze_coin(name, tf):
     conf=max(20,min(92,conf))
     if conf>=65 and st_trend==1 and close_price>ema50:
         signal="COMPRA"; quality_color="entra" if conf>=75 else "quasi"; quality_label="ENTRA" if conf>=75 else "QUASI PRONTO"
-        quality_simple=f"[{src}] LIVE ${price:.2f} = TradingView BINANCE:{PAIRS_LIVE[name]} - RSI{int(rsi)} EMA{int(ema50)}/{int(ema200)} ST{'UP' if st_trend==1 else 'DOWN'} Stoch{stoch_k} VWAP{int(vwap)} Sup{int(support)} Res{int(resistance)} ADX{adx} Volx{vol_ratio} = {points}/{max_points} -> {conf}%"
+        quality_simple=f"[{src}] LIVE ${price:.2f} = BINANCE:{PAIRS_LIVE[name]} - RSI{int(rsi)} EMA{int(ema50)}/{int(ema200)} ST{'UP' if st_trend==1 else 'DOWN'} Stoch{stoch_k} VWAP{int(vwap)} Sup{int(support)} Res{int(resistance)} ADX{adx} Volx{vol_ratio} = {points}/{max_points} -> {conf}%"
     elif conf<=40 and st_trend==-1:
         signal="VENDI"; quality_color="entra" if conf>=60 else "quasi"; quality_label="ENTRA" if conf>=60 else "QUASI PRONTO"
         quality_simple=f"[{src}] ribasso LIVE ${price:.2f} RSI{int(rsi)} Stoch{stoch_k} ADX{adx} = {conf}%"
@@ -147,13 +144,13 @@ def analyze_coin(name, tf):
         if conf>=65:
             signal="COMPRA"; quality_color="quasi"; quality_label="QUASI PRONTO"; quality_simple=f"[{src}] {points}/{max_points} ({conf}%) quasi pronto TF {tf} LIVE ${price:.2f}"
         else:
-            signal="ASPETTA"; quality_color="wait"; quality_label="ASPETTA"; quality_simple=f"[{src}] LIVE ${price:.2f} - {conf}% da RSI EMA ST Stoch VWAP Sup/Res ADX Vol = {points}/{max_points} - TF {tf}"
+            signal="ASPETTA"; quality_color="wait"; quality_label="ASPETTA"; quality_simple=f"[{src}] LIVE ${price:.2f} - {conf}% - TF {tf}"
     sl=price*0.98 if signal=="COMPRA" else price*1.02
     tp=price*1.04 if signal=="COMPRA" else price*0.96
     return {"price":price,"real_price":price,"close_price":close_price,"source":src,"signal":signal,"conf":int(conf),"quality_color":quality_color,"quality_label":quality_label,"quality_score":int(conf),"quality_simple":quality_simple,"rsi":int(rsi),"ema50":ema50,"ema200":ema200,"st_trend":st_trend,"st_val":st_val,"stoch_k":stoch_k,"vwap":vwap,"support":support,"resistance":resistance,"adx":adx,"vol_ratio":vol_ratio,"sl":sl,"tp":tp}
 
 @app.route("/")
-def home(): return Response("Bot V52 - forzato USDT = TradingView", mimetype="text/plain")
+def home(): return Response("Bot V53 solo stats", mimetype="text/plain")
 
 @app.route("/api/signals")
 def api_signals():
@@ -166,21 +163,6 @@ def api_signals():
         result[name]=data
     return jsonify({"ok":True,"tf":tf,"coins":result,"time":rome_now().isoformat(),"version":VERSION})
 
-@app.route("/api/chart")
-def api_chart():
-    coin=request.args.get("coin","BTC"); tf=request.args.get("tf","1H")
-    interval=TF_MAP.get(tf,"1h")
-    ohlc=fetch_binance_klines(PAIRS_OHLC.get(coin,"BTCUSDT"),interval,200)
-    return jsonify({"ok":True,"data":ohlc,"source":f"BINANCE:{PAIRS_OHLC.get(coin,'BTCUSDT')}"})
-
-@app.route("/api/backtest")
-def api_backtest():
-    last20=[]; wins=0
-    for i in range(12):
-        win=random.choice([True,False,True]); last20.append({"win":win})
-        if win: wins+=1
-    return jsonify({"total_signals":120,"wins":72,"last20":last20,"last20_win":int(wins/12*100)})
-
 @app.route("/app")
 def app_page():
     html = """<!DOCTYPE html>
@@ -188,8 +170,7 @@ def app_page():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V52</title>
-<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<title>VENDI V53</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
 body{margin:0;background:#f8fafc;color:#0f172a}
@@ -209,19 +190,23 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 .coin-icon.oro{background:#ca8a04}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:flex-end;justify-content:center;z-index:50}
 .modal.show{display:flex}
-.modal-box{background:white;width:100%;max-width:500px;border-radius:20px 20px 0 0;padding:16px;max-height:90vh;overflow:auto}
-.big-box{border-radius:14px;padding:12px;margin:10px 0;text-align:center}
-.entra-big{background:#dcfce7;border:1px solid #86efac}
-.quasi-big{background:#fef3c7;border:1px solid #fcd34d}
-.wait-big{background:#f1f5f9;border:1px solid #e2e8f0}
+.modal-box{background:white;width:100%;max-width:500px;border-radius:20px 20px 0 0;padding:20px;max-height:90vh;overflow:auto}
+.big-box{border-radius:14px;padding:16px;margin:12px 0;text-align:center}
+.entra-big{background:#dcfce7;border:2px solid #22c55e}
+.quasi-big{background:#fef3c7;border:2px solid #f59e0b}
+.wait-big{background:#f1f5f9;border:2px solid #e2e8f0}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.stat-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;text-align:center}
+.stat-card b{display:block;font-size:18px;color:#0f172a}
+.stat-card span{font-size:11px;color:#64748b}
 </style>
 </head>
 <body>
 <div class="header">
 <div class="logo-img">VEND</div>
 <div>
-<div style="font-weight:800;font-size:16px">VENDI - PUSH V10 LITE - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V52</span> <span style="font-size:10px;background:white;color:#0f172a;padding:2px 6px;border-radius:10px">BINANCE:BTCUSDT</span></div>
-<div style="font-size:12px;opacity:0.8">Stesso prezzo di TradingView - Senza EUR</div>
+<div style="font-weight:800;font-size:16px">VENDI - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:12px">V53</span> SOLO STATS</div>
+<div style="font-size:12px;opacity:0.8">Niente grafico - Solo statistiche TradingView</div>
 </div>
 </div>
 <div class="tfs">
@@ -231,22 +216,37 @@ body{margin:0;background:#f8fafc;color:#0f172a}
 <button id="b5m" onclick="loadTF('5m')">5m</button>
 </div>
 <div id="coins" style="background:white;border-radius:12px;margin:0 8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);min-height:100px"></div>
+
 <div id="modal" class="modal" onclick="if(event.target==this)closeModal()">
 <div class="modal-box">
-<div style="display:flex;justify-content:space-between;align-items:center">
-<b id="mCoin">BTC</b><button onclick="closeModal()" style="border:none;background:#f1f5f9;padding:6px 10px;border-radius:8px">X</button>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<b id="mCoin" style="font-size:18px">BTC</b><button onclick="closeModal()" style="border:none;background:#f1f5f9;padding:8px 12px;border-radius:10px;font-weight:700">X</button>
 </div>
-<div id="mPrice" style="font-size:12px;color:#64748b;margin:6px 0"></div>
+<div id="mPrice" style="font-size:12px;color:#64748b;margin-bottom:10px"></div>
 <div id="mQualityBig" class="big-box"></div>
-<div id="mSimpleText" style="font-size:13px;color:#334155;margin:8px 0;word-break:break-word"></div>
-<div id="chart" style="width:100%;height:260px;background:#0f172a;border-radius:10px;margin:10px 0;display:flex;align-items:center;justify-content:center;color:#94a3b8">Carico grafico BINANCE:BTCUSDT...</div>
-<div id="mExpert" style="font-size:11px;color:#64748b;background:#f8fafc;padding:8px;border-radius:8px;word-break:break-word"></div>
-<div id="mWinRateBig" style="font-size:12px;margin:10px 0"></div>
+
+<div class="stat-grid">
+<div class="stat-card"><span>RSI</span><b id="sRSI">-</b></div>
+<div class="stat-card"><span>STOCH K</span><b id="sStoch">-</b></div>
+<div class="stat-card"><span>EMA 50 / 200</span><b id="sEMA" style="font-size:13px">-</b></div>
+<div class="stat-card"><span>SUPERTREND</span><b id="sST" style="font-size:13px">-</b></div>
+<div class="stat-card"><span>VWAP</span><b id="sVWAP">-</b></div>
+<div class="stat-card"><span>ADX</span><b id="sADX">-</b></div>
+<div class="stat-card"><span>SUPPORTO</span><b id="sSup">-</b></div>
+<div class="stat-card"><span>RESISTENZA</span><b id="sRes">-</b></div>
+<div class="stat-card"><span>VOLUME</span><b id="sVol">-</b></div>
+<div class="stat-card"><span>SL / TP</span><b id="sSLTP" style="font-size:11px">-</b></div>
+</div>
+
+<div id="mSimpleText" style="font-size:12px;color:#334155;background:#f8fafc;padding:12px;border-radius:10px;margin:10px 0;word-break:break-word;line-height:1.4"></div>
+<div id="mExpert" style="font-size:10px;color:#94a3b8;text-align:center;margin-top:8px"></div>
 </div>
 </div>
+
 <script>
 var curTF='1H';
 var lastData=null;
+
 function qualityBadge(info){
   var c=info.quality_color||'wait'; var l=info.quality_label||'ASPETTA';
   if(c=='entra') return '<span class="badge badge-entra">'+l+'</span>';
@@ -257,7 +257,7 @@ async function loadTF(tf){
   curTF=tf;
   document.querySelectorAll('.tfs button').forEach(function(b){b.classList.remove('active');});
   var el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center">Carico V52 '+tf+' da BINANCE:BTCUSDT...</div>';
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center">Carico V53 '+tf+'...</div>';
   try{
     var res=await fetch('/api/signals?tf='+tf);
     var d=await res.json();
@@ -280,37 +280,35 @@ async function loadTF(tf){
 async function openDetails(coin){
   if(!lastData) return;
   var info=lastData.coins[coin];
-  document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2)+' ['+info.source+']';
-  document.getElementById('mPrice').textContent=info.signal+' '+info.conf+'% - TF '+curTF+' - '+info.source;
+  document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2);
+  document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF+' - LIVE $'+info.real_price.toFixed(2)+' (close $'+info.close_price.toFixed(2)+')';
   var big=document.getElementById('mQualityBig');
   big.className='big-box '+(info.quality_color=='entra'?'entra-big':info.quality_color=='quasi'?'quasi-big':'wait-big');
   if(info.quality_color=='entra'){
-    big.innerHTML='<div style="font-size:22px;font-weight:800;color:'+(info.signal=='COMPRA'?'#166534':'#991b1b')+'">'+info.quality_label+' - '+info.signal+'</div><div style="font-size:14px;margin-top:6px">Fonte: '+info.source+' = TradingView</div><div style="font-size:12px;color:#64748b;margin-top:4px">Score '+info.quality_score+'% - SL $'+info.sl.toFixed(0)+' TP $'+info.tp.toFixed(0)+'</div>';
+    big.innerHTML='<div style="font-size:24px;font-weight:900;color:'+(info.signal=='COMPRA'?'#166534':'#991b1b')+'">'+info.quality_label+' - '+info.signal+'</div><div style="font-size:14px;margin-top:8px;font-weight:600">Segnale attivo</div><div style="font-size:13px;color:#475569;margin-top:6px">Score '+info.quality_score+'% - SL $'+info.sl.toFixed(0)+' TP $'+info.tp.toFixed(0)+'</div>';
   }else if(info.quality_color=='quasi'){
-    big.innerHTML='<div style="font-size:20px;font-weight:800;color:#92400e">QUASI PRONTO</div><div style="font-size:13px;margin-top:6px">Fonte '+info.source+'</div>';
+    big.innerHTML='<div style="font-size:22px;font-weight:900;color:#92400e">QUASI PRONTO</div><div style="font-size:13px;margin-top:6px">Manca poco</div><div style="font-size:12px;color:#64748b">Score '+info.quality_score+'%</div>';
   }else{
-    big.innerHTML='<div style="font-size:20px;font-weight:800;color:#475569">ASPETTA</div>';
+    big.innerHTML='<div style="font-size:22px;font-weight:900;color:#475569">ASPETTA</div><div style="font-size:13px;margin-top:6px">Non è il momento giusto</div>';
   }
+  // Stats grid
+  document.getElementById('sRSI').textContent=info.rsi;
+  document.getElementById('sStoch').textContent=info.stoch_k;
+  document.getElementById('sEMA').textContent=Math.round(info.ema50)+' / '+Math.round(info.ema200);
+  document.getElementById('sST').textContent=(info.st_trend==1?'UP ':'DOWN ')+'$'+Math.round(info.st_val);
+  document.getElementById('sVWAP').textContent='$'+Math.round(info.vwap);
+  document.getElementById('sADX').textContent=info.adx;
+  document.getElementById('sSup').textContent='$'+Math.round(info.support);
+  document.getElementById('sRes').textContent='$'+Math.round(info.resistance);
+  document.getElementById('sVol').textContent='x'+info.vol_ratio;
+  document.getElementById('sSLTP').textContent='$'+Math.round(info.sl)+' / $'+Math.round(info.tp);
+  
   document.getElementById('mSimpleText').textContent=info.quality_simple;
-  document.getElementById('mExpert').innerHTML='Fonte: '+info.source+' LIVE $'+info.price.toFixed(2)+' - RSI '+info.rsi+' - EMA '+info.ema50.toFixed(0)+'/'+info.ema200.toFixed(0)+' - ST '+(info.st_trend==1?'UP':'DOWN')+' $'+info.st_val.toFixed(0)+' - Stoch K'+info.stoch_k+' - VWAP $'+info.vwap.toFixed(0)+' - Sup $'+info.support.toFixed(0)+' Res $'+info.resistance.toFixed(0)+' - ADX '+info.adx;
+  document.getElementById('mExpert').textContent='Fonte: '+info.source+' = TradingView BINANCE:'+coin+'USDT - Aggiornato ogni 15s';
   document.getElementById('modal').classList.add('show');
-  loadChart(coin,curTF);
 }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
-async function loadChart(coin,tf){
-  var chartEl=document.getElementById('chart');
-  chartEl.innerHTML='Carico grafico BINANCE:'+coin+'USDT '+tf+'...';
-  try{
-    var r=await fetch('/api/chart?coin='+coin+'&tf='+tf);
-    var j=await r.json();
-    if(!j.ok || !j.data || j.data.length<10){ chartEl.innerHTML='Dati in aggiornamento...'; return; }
-    chartEl.innerHTML='';
-    var c=LightweightCharts.createChart(chartEl,{width:chartEl.clientWidth,height:260,layout:{background:{color:'#0f172a'},textColor:'#94a3b8'},grid:{vertLines:{color:'#1e293b'},horzLines:{color:'#1e293b'}},timeScale:{timeVisible:true}});
-    var s=c.addCandlestickSeries({upColor:'#22c55e',downColor:'#ef4444'});
-    s.setData(j.data.map(function(d){return {time:d.time,open:d.open,high:d.high,low:d.low,close:d.close};}));
-    c.timeScale().fitContent();
-  }catch(e){ chartEl.innerHTML='Grafico non disponibile - '+e.message; }
-}
+
 loadTF('1H');
 setInterval(function(){loadTF(curTF);}, 15000);
 </script>
