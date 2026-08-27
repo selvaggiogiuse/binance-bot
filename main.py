@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, jsonify, Response, request
-import os, requests, time, json
+import os, requests, time, json, threading
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -15,19 +15,21 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 75  # <--- SOGLIA 75% CHE VUOI TU
+TELEGRAM_MIN_CONF = 75  # SOGLIA 75% CHE VUOI
 
 PAIRS_LIVE = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
 PAIRS_OHLC = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
 TF_MAP = {"5m": "5m", "15m": "15m", "1H": "1h", "4H": "4h", "1D": "1d"}
-VERSION = "V57 - FIX 75% - NOTIFICHE SBLOCCATE"
+VERSION = "V57 - FULL UI - FIX 75%"
 
 LAST_TELEGRAM = {}
-TELEGRAM_COOLDOWN = 600  # abbassato a 10 min invece di 15 per più notifiche
+TELEGRAM_COOLDOWN = 600  # 10 min
 
 def send_telegram_signal(coin, tf, signal, conf, price, rsi, stoch, sl, tp, sl_pct, tp_pct, source):
     if not TELEGRAM_ENABLED:
         return {"ok": False, "error": "Telegram non configurato"}
+    if conf < TELEGRAM_MIN_CONF:
+        return {"ok": False, "error": f"Conf {conf}% < soglia {TELEGRAM_MIN_CONF}%"}
     key = f"{coin}_{tf}"
     now = time.time()
     last = LAST_TELEGRAM.get(key, 0)
@@ -50,9 +52,9 @@ Confluenza: controlla app per multi-TF - Soglia {TELEGRAM_MIN_CONF}%"""
         r = requests.post(url, json=payload, timeout=5)
         if r.status_code==200:
             LAST_TELEGRAM[key]=now
-            return {"ok": True}
+            return {"ok": True, "sent": text}
         else:
-            return {"ok": False, "error": f"Telegram API {r.status_code}"}
+            return {"ok": False, "error": f"Telegram API {r.status_code}: {r.text[:200]}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -82,6 +84,16 @@ def get_live_price_ticker(name):
         if r.status_code==200:
             return float(r.json()['price']), f"BINANCE:{symbol}"
     except: pass
+    try:
+        kraken_map={"BTC":"XXBTZUSD","ETH":"XETHZUSD","ORO":"PAXGUSD"}
+        kp=kraken_map.get(name,"XXBTZUSD")
+        r=requests.get(f"https://api.kraken.com/0/public/Ticker?pair={kp}",timeout=3)
+        if r.status_code==200:
+            j=r.json(); result=j.get("result",{})
+            if result:
+                first_key=list(result.keys())[0]
+                return float(result[first_key]["c"][0]), f"KRAKEN:{kp}"
+    except: pass
     return None, "CACHE"
 
 def fetch_binance_klines(symbol, interval, limit=200):
@@ -93,10 +105,28 @@ def fetch_binance_klines(symbol, interval, limit=200):
         return [{"time":int(k[0]/1000),"open":float(k[1]),"high":float(k[2]),"low":float(k[3]),"close":float(k[4]),"volume":float(k[5])} for k in data]
     except: return []
 
+def fetch_kraken_ohlc(name, interval, limit=200):
+    try:
+        kraken_map={"BTC":"XXBTZUSD","ETH":"XETHZUSD","ORO":"PAXGUSD"}
+        kp=kraken_map.get(name,"XXBTZUSD")
+        kraken_interval_map={"5m":1,"15m":15,"1h":60,"4h":240,"1d":1440}
+        k_interval=kraken_interval_map.get(interval,60)
+        url=f"https://api.kraken.com/0/public/OHLC?pair={kp}&interval={k_interval}"
+        r=requests.get(url,timeout=5,headers={"User-Agent":"Mozilla/5.0"})
+        if r.status_code!=200: return []
+        j=r.json(); result=j.get("result",{})
+        if not result: return []
+        first_key=[k for k in result.keys() if k!="last"][0]
+        data=result[first_key]
+        return [{"time":int(k[0]),"open":float(k[1]),"high":float(k[2]),"low":float(k[3]),"close":float(k[4]),"volume":float(k[6])} for k in data[-limit:]]
+    except: return []
+
 def fetch_ohlc_with_fallback(name, interval, limit=200):
     symbol=PAIRS_OHLC.get(name,"BTCUSDT")
     ohlc=fetch_binance_klines(symbol,interval,limit)
     if ohlc and len(ohlc)>=20: return ohlc, "binance"
+    ohlc2=fetch_kraken_ohlc(name,interval,limit)
+    if ohlc2 and len(ohlc2)>=20: return ohlc2, "kraken"
     return [], "fail"
 
 def analyze_coin(name, tf, send_telegram=False):
@@ -158,13 +188,13 @@ def analyze_coin(name, tf, send_telegram=False):
     sl_pct = 0.008 if is_scalp else 0.02
     tp_pct = 0.015 if is_scalp else 0.04
 
-    # --- FIX PER SBLOCCARE NOTIFICHE A 75% ---
+    # FIX SBLOCCATO A 75%
     if conf>=60 and st_trend==1 and close_price>ema9:
         signal="COMPRA"
-        quality_color="entra" if conf>=70 else "quasi"  # prima era 78, ora 70
+        quality_color="entra" if conf>=70 else "quasi"  # prima era 78, ora 70 così con 75% entra
         quality_label="ENTRA" if conf>=70 else "QUASI PRONTO"
         quality_simple=f"SCALP {tf} LIVE ${price:.2f} RSI{int(rsi)} EMA9>{int(ema9)} {conf}%"
-    elif conf>=60 and st_trend==-1:  # FIX: prima era conf<=35 impossibile
+    elif conf>=60 and st_trend==-1:  # FIX VENDI che prima era bloccato
         signal="VENDI"
         quality_color="entra" if conf>=70 else "quasi"
         quality_label="ENTRA" if conf>=70 else "QUASI PRONTO"
@@ -190,7 +220,8 @@ def analyze_coin(name, tf, send_telegram=False):
 
 @app.route("/")
 def home():
-    return Response(f"Bot {VERSION} - Soglia {TELEGRAM_MIN_CONF}% - {rome_now()}", mimetype="text/plain")
+    status = "TELEGRAM ON 75%" if TELEGRAM_ENABLED else "TELEGRAM OFF"
+    return Response(f"Bot {VERSION} - {status} - {rome_now()}", mimetype="text/plain")
 
 @app.route("/api/signals")
 def api_signals():
@@ -218,7 +249,208 @@ def api_telegram_config():
 
 @app.route("/app")
 def app_page():
-    return Response("Vai su /api/signals?tf=5m - Versione FIX 75%", mimetype="text/plain")
+    html = """<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VENDI V57 FIX 75%</title>
+<style>
+*{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
+body{margin:0;background:#020617;color:#f1f5f9}
+.header{background:linear-gradient(135deg,#020617,#1e293b);color:white;padding:12px 16px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10;border-bottom:1px solid #1e293b}
+.logo-img{width:48px;height:48px;border-radius:12px;background:#22c55e;display:flex;align-items:center;justify-content:center;font-weight:900;color:#052e16;font-size:18px}
+.badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-block}
+.badge-entra{background:#22c55e;color:#052e16;animation:glow 1s infinite alternate}
+.badge-quasi{background:#facc15;color:#422006}.badge-wait{background:#1e293b;color:#94a3b8}.badge-loading{background:#334155;color:#cbd5e1}
+@keyframes glow{0%{box-shadow:0 0 5px #22c55e}100%{box-shadow:0 0 15px #22c55e}}
+.tfs{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;background:#0f172a}
+.tfs button{border:1px solid #1e293b;background:#1e293b;color:#cbd5e1;padding:8px 14px;border-radius:20px;font-weight:700;cursor:pointer;white-space:nowrap;font-size:13px}
+.tfs button.active{background:#22c55e;color:#052e16;border-color:#22c55e}
+.coin-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #1e293b;background:#0f172a;cursor:pointer}
+.coin-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:900;color:white;flex-shrink:0}
+.coin-icon.btc{background:#f7931a}.coin-icon.eth{background:#8b5cf6}.coin-icon.oro{background:#ca8a04}
+.spark{width:70px;height:28px;display:inline-block;margin-left:6px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,0.7);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.modal.show{display:flex}
+.modal-box{background:#0f172a;color:#f1f5f9;width:100%;max-width:500px;border-radius:20px 20px 0 0;padding:20px;max-height:92vh;overflow:auto;border:1px solid #1e293b}
+.big-box{border-radius:14px;padding:16px;margin:12px 0;text-align:center}
+.entra-big{background:#052e16;border:2px solid #22c55e}.quasi-big{background:#422006;border:2px solid #facc15}.wait-big{background:#1e293b;border:1px solid #334155}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:12px 0}
+.stat-card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:8px;text-align:center}
+.stat-card b{display:block;font-size:15px;color:#f1f5f9}.stat-card span{font-size:9px;color:#94a3b8}
+.tele-banner{margin:8px 12px;padding:10px 12px;border-radius:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+.tele-on{background:#052e16;border:1px solid #16a34a;color:#86efac}.tele-off{background:#450a0a;border:1px solid #dc2626;color:#fca5a5}
+</style>
+</head>
+<body>
+<div class="header">
+<div class="logo-img">VEND</div>
+<div style="flex:1">
+<div style="font-weight:800;font-size:14px">VENDI - <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:11px">V57 FIX 75%</span> TELEGRAM</div>
+<div style="font-size:10px;opacity:0.7">Notifiche Telegram • Scalp 5m - Auto 75%</div>
+</div>
+<div style="text-align:right">
+<button onclick="testTelegram()" style="background:#0088cc;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">📱 Test TG</button>
+</div>
+</div>
+<div id="teleBanner" class="tele-banner tele-off">Verifico Telegram...</div>
+<div class="tfs">
+<button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m SCALP</button>
+<button id="b15m" onclick="loadTF('15m')">15m</button>
+<button id="b1H" onclick="loadTF('1H')">1H filtro</button>
+<button id="bConf" onclick="loadTF('5m', true)" style="background:#0088cc;color:white">📱 Con TG</button>
+</div>
+<div id="coins" style="background:#0f172a;border-radius:12px;margin:0 8px;overflow:hidden;border:1px solid #1e293b;min-height:100px"><div style="padding:20px;text-align:center;color:#94a3b8">Carico scalping con Telegram...</div></div>
+<div id="modal" class="modal" onclick="if(event.target==this)closeModal()">
+<div class="modal-box">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<b id="mCoin" style="font-size:18px">BTC</b><button onclick="closeModal()" style="border:none;background:#1e293b;color:white;padding:8px 12px;border-radius:10px;font-weight:700">X</button>
+</div>
+<div id="mPrice" style="font-size:11px;color:#94a3b8;margin-bottom:10px"></div>
+<div id="mQualityBig" class="big-box"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">
+<div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">STOP LOSS</span><br><b id="mSL" style="color:#22c55e">-</b><br><span id="mSLpct" style="font-size:9px;color:#94a3b8">-</span></div>
+<div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TAKE PROFIT</span><br><b id="mTP" style="color:#22c55e">-</b><br><span id="mTPpct" style="font-size:9px;color:#94a3b8">-</span></div>
+</div>
+<div class="stat-grid">
+<div class="stat-card"><span>RSI / FAST</span><b id="sRSI">-</b></div>
+<div class="stat-card"><span>STOCH K</span><b id="sStoch">-</b></div>
+<div class="stat-card"><span>EMA9 / 21</span><b id="sEMA" style="font-size:11px">-</b></div>
+<div class="stat-card"><span>SUPERTREND</span><b id="sST" style="font-size:11px">-</b></div>
+<div class="stat-card"><span>VWAP</span><b id="sVWAP">-</b></div>
+<div class="stat-card"><span>ADX</span><b id="sADX">-</b></div>
+</div>
+<div id="mSimpleText" style="font-size:11px;color:#cbd5e1;background:#1e293b;padding:12px;border-radius:10px;margin:10px 0;border:1px solid #334155"></div>
+<button onclick="sendThisToTelegram()" style="width:100%;background:#0088cc;color:white;border:none;padding:12px;border-radius:10px;font-weight:800;margin-top:8px">📱 MANDA SU TELEGRAM ORA</button>
+</div>
+</div>
+<script>
+var curTF='5m';
+var lastData=null;
+function qualityBadge(info){
+  var c=info.quality_color||'wait'; var l=info.quality_label||'ASPETTA';
+  if(c=='entra') return '<span class="badge badge-entra">'+l+'</span>';
+  if(c=='quasi') return '<span class="badge badge-quasi">'+l+'</span>';
+  if(c=='loading') return '<span class="badge badge-loading">'+l+'</span>';
+  return '<span class="badge badge-wait">'+l+'</span>';
+}
+function sparklineSVG(data){
+  if(!data || data.length<2) return '';
+  var min=Math.min(...data), max=Math.max(...data);
+  var range=max-min || 1;
+  var w=70, h=28;
+  var points=data.map((v,i)=>{
+    var x=(i/(data.length-1))*w;
+    var y=h - ((v-min)/range)*h;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  var color=data[data.length-1]>=data[0]?'#22c55e':'#ef4444';
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline fill="none" stroke="${color}" stroke-width="1.8" points="${points}"/></svg>`;
+}
+async function checkTelegram(){
+  try{
+    var r=await fetch('/api/telegram_config');
+    var j=await r.json();
+    var banner=document.getElementById('teleBanner');
+    if(j.enabled){
+      banner.className='tele-banner tele-on';
+      banner.innerHTML=`<span>✅ Telegram attivo - Soglia ${j.min_confidence}% - Cooldown ${j.cooldown_minutes} min</span>`;
+    }else{
+      banner.className='tele-banner tele-off';
+      banner.innerHTML=`<span>❌ Telegram OFF</span>`;
+    }
+  }catch(e){}
+}
+async function loadTF(tf, withTelegram=false){
+  curTF=tf;
+  document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
+  var el=document.getElementById('b'+tf); if(el) el.classList.add('active');
+  document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+(withTelegram?' + invio Telegram...':'...')+'</div>';
+  try{
+    var url='/api/signals?tf='+tf+(withTelegram?'&telegram=1':'');
+    var res=await fetch(url);
+    var d=await res.json();
+    lastData=d;
+    var html='';
+    for(var name in d.coins){
+      var info=d.coins[name];
+      var iconClass=name=='BTC'?'btc':name=='ETH'?'eth':'oro';
+      var ico=name=='BTC'?'B':name=='ETH'?'E':'Au';
+      var qBadge=qualityBadge(info);
+      var price='$'+info.price.toFixed(2);
+      var spark=sparklineSVG(info.spark);
+      var actionText=info.quality_color=='loading'?'...': info.quality_color=='entra' ? (info.signal=='COMPRA'?'🚀 COMPRA ORA':'🔻 VENDI ORA') : '⏸️ Aspetta';
+      html+=`<div class="coin-row" onclick="openDetails('${name}')"><div style="display:flex;gap:10px;align-items:center"><div class="coin-icon ${iconClass}">${ico}</div><div><b style="font-size:15px">${name}</b> - ${price}${spark}<div style="font-size:11px;color:#94a3b8;margin-top:2px">RSI ${info.rsi} • Stoch ${info.stoch_k} • ${actionText}</div></div></div><div style="text-align:right">${qBadge}<div style="font-size:11px;color:#64748b;margin-top:4px">${info.signal} ${info.conf>0?info.conf+'%':''}</div></div></div>`;
+    }
+    if(d.telegram_results && Object.keys(d.telegram_results).length>0){
+      html+=`<div style="background:#052e16;padding:10px 14px;font-size:11px;color:#86efac;border-top:1px solid #16a34a">📱 Inviati su Telegram: ${Object.keys(d.telegram_results).join(', ')}</div>`;
+    }
+    document.getElementById('coins').innerHTML=html;
+  }catch(e){
+    document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444">Errore: '+e.message+'</div>';
+  }
+}
+async function openDetails(coin){
+  if(!lastData) return;
+  var info=lastData.coins[coin];
+  document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2);
+  document.getElementById('mPrice').textContent=info.source+'/'+info.ohlc_src+' - '+info.signal+' '+info.conf+'% - TF '+curTF;
+  var big=document.getElementById('mQualityBig');
+  big.className='big-box '+(info.quality_color=='entra'?'entra-big':info.quality_color=='quasi'?'quasi-big':'wait-big');
+  big.innerHTML=info.quality_color=='entra'?`<div style="font-size:22px;font-weight:900;color:#22c55e">${info.quality_label} - ${info.signal} ${info.conf}%</div>`:`<div style="font-size:20px;font-weight:900">${info.quality_label}</div>`;
+  document.getElementById('mSL').textContent='$'+Math.round(info.sl);
+  document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%';
+  document.getElementById('mTP').textContent='$'+Math.round(info.tp);
+  document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%';
+  document.getElementById('sRSI').textContent=info.rsi+' / '+info.rsi_fast;
+  document.getElementById('sStoch').textContent=info.stoch_k;
+  document.getElementById('sEMA').textContent=Math.round(info.ema9)+' / '+Math.round(info.ema21);
+  document.getElementById('sST').textContent=(info.st_trend==1?'UP ':'DOWN ')+'$'+Math.round(info.st_val);
+  document.getElementById('sVWAP').textContent='$'+Math.round(info.vwap);
+  document.getElementById('sADX').textContent=info.adx;
+  document.getElementById('mSimpleText').textContent=info.quality_simple;
+  document.getElementById('modal').classList.add('show');
+  window._currentCoin=coin;
+}
+function closeModal(){ document.getElementById('modal').classList.remove('show'); }
+async function testTelegram(){
+  document.getElementById('teleBanner').textContent='Invio test Telegram...';
+  try{
+    var r=await fetch('/api/telegram_test');
+    var j=await r.json();
+    if(j.ok){ alert('✅ Test Telegram inviato!'); }else{ alert('❌ Errore: '+j.error); }
+    checkTelegram();
+  }catch(e){ alert('Errore: '+e.message); }
+}
+async function sendThisToTelegram(){
+  if(!window._currentCoin) return;
+  var coin=window._currentCoin;
+  try{
+    var r=await fetch(`/api/signals?tf=${curTF}&telegram=1`);
+    var j=await r.json();
+    alert('Invio Telegram per '+coin+' - Risultato: '+JSON.stringify(j.telegram_results[coin]||'nessun ENTRA'));
+  }catch(e){ alert(e.message); }
+}
+checkTelegram();
+loadTF('5m');
+setInterval(()=>loadTF(curTF), 15000);
+</script>
+</body></html>
+"""
+    return Response(html, mimetype="text/html; charset=utf-8")
+
+# LOOP AUTOMATICO - MANDA TELEGRAM DA SOLO OGNI 60 SECONDI
+def background_loop():
+    while True:
+        try:
+            for name in PAIRS_LIVE.keys():
+                analyze_coin(name, "5m", send_telegram=True)
+        except Exception as e:
+            print(f"Loop error: {e}")
+        time.sleep(60)
+
+threading.Thread(target=background_loop, daemon=True).start()
 
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
