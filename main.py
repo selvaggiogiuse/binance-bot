@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, jsonify, Response, request
-import os, requests, time, threading
+import os, requests, time, threading, json
 from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
@@ -14,15 +14,32 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 TELEGRAM_MIN_CONF = 75
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V58 LIGHT FINAL - TG 5m+15m+1H - FIX 90%"
-LAST_TELEGRAM = {}
-COOLDOWN = 300  # 5 min invece di 10
+VERSION = "V59 LIGHT PRO - ADX + CHART + PERSIST"
+COOLDOWN = 300
+LAST_FILE = "last_telegram.json"
+
+def load_json(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path,"r") as f:
+                return json.load(f)
+    except: pass
+    return default
+def save_json(path, data):
+    try:
+        with open(path,"w") as f:
+            json.dump(data,f)
+    except Exception as e:
+        print(f"Save {path} {e}")
+
+LAST_TELEGRAM = load_json(LAST_FILE, {})
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
     k=2/(p+1); ema=sum(data[:p])/p
     for v in data[p:]: ema=v*k+ema*(1-k)
     return ema
+
 def rsi_calc(closes, period=14):
     if len(closes) < period+1: return 50
     g=0; l=0
@@ -33,6 +50,54 @@ def rsi_calc(closes, period=14):
     if l==0: return 70 if g>0 else 50
     rs=g/l if l!=0 else 0
     return 100-(100/(1+rs))
+
+def adx_calc(ohlc, period=14):
+    # ohlc = list of dict con high, low, close
+    if len(ohlc) < period+5:
+        return 25  # default medio se pochi dati
+    tr_list=[]; plus_dm=[]; minus_dm=[]
+    for i in range(1, len(ohlc)):
+        h=ohlc[i]["high"]; l=ohlc[i]["low"]; c_prev=ohlc[i-1]["close"]
+        h_prev=ohlc[i-1]["high"]; l_prev=ohlc[i-1]["low"]
+        up = h - h_prev
+        down = l_prev - l
+        plus = up if up>down and up>0 else 0
+        minus = down if down>up and down>0 else 0
+        tr = max(h-l, abs(h-c_prev), abs(l-c_prev))
+        plus_dm.append(plus); minus_dm.append(minus); tr_list.append(tr)
+    # Wilder smoothing
+    def wilder_smooth(data, p):
+        smoothed=[]
+        first=sum(data[:p])
+        smoothed.append(first)
+        for i in range(p, len(data)):
+            smoothed.append(smoothed[-1] - smoothed[-1]/p + data[i])
+        return smoothed
+    if len(tr_list) < period:
+        return 25
+    tr_s = wilder_smooth(tr_list, period)
+    plus_s = wilder_smooth(plus_dm, period)
+    minus_s = wilder_smooth(minus_dm, period)
+    dx=[]
+    for i in range(len(tr_s)):
+        if tr_s[i]==0:
+            dx.append(0)
+        else:
+            plus_di=100*plus_s[i]/tr_s[i]
+            minus_di=100*minus_s[i]/tr_s[i]
+            sum_di=plus_di+minus_di
+            if sum_di==0:
+                dx.append(0)
+            else:
+                dx.append(100*abs(plus_di-minus_di)/sum_di)
+    # ADX = media DX smussata
+    if len(dx) < period:
+        return sum(dx)/len(dx) if dx else 25
+    adx_first=sum(dx[:period])/period
+    adx_vals=[adx_first]
+    for i in range(period, len(dx)):
+        adx_vals.append((adx_vals[-1]*(period-1)+dx[i])/period)
+    return int(adx_vals[-1]) if adx_vals else 25
 
 def get_price(name):
     sym=PAIRS.get(name,"BTCUSDT")
@@ -86,7 +151,7 @@ def fetch_ohlc(name, tf, limit=200):
     if ohlc2 and len(ohlc2)>=20: return ohlc2, "KRAKEN"
     return [], "FAIL"
 
-def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, extra, force=False):
+def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, adx, extra, force=False):
     if not TELEGRAM_ENABLED: return {"ok":False,"error":"no token"}
     if not force and conf < TELEGRAM_MIN_CONF: return {"ok":False,"error":f"conf {conf}<{TELEGRAM_MIN_CONF}"}
     key=f"{coin}_{tf}"
@@ -94,17 +159,22 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
     if not force and now - LAST_TELEGRAM.get(key,0) < COOLDOWN:
         return {"ok":False,"error":f"cooldown {int(COOLDOWN-(now-LAST_TELEGRAM.get(key,0)))}s","key":key}
     emoji="🚀" if signal=="COMPRA" else "🔻"
-    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf}
+    rr=tp_pct/sl_pct if sl_pct>0 else 0
+    tv_sym={"BTC":"BINANCE:BTCUSDT","ETH":"BINANCE:ETHUSDT","ORO":"BINANCE:PAXGUSDT"}[coin]
+    chart_link=f"https://www.tradingview.com/chart/?symbol={tv_sym}"
+    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} - V59 PRO
 
 💰 Entry: ${price:.2f} ({source})
-🎯 SL: ${sl:.2f} (-{sl_pct:.2f}%) | TP: ${tp:.2f} (+{tp_pct:.2f}%)
-📊 RSI {rsi} | {extra}
+🎯 SL: ${sl:.2f} (-{sl_pct:.2f}%) | TP: ${tp:.2f} (+{tp_pct:.2f}%) R:R 1:{rr:.1f}
+📊 RSI {rsi} | ADX {adx} | {extra}
+📈 Chart: {chart_link}
 ⏰ {rome_now().strftime('%H:%M:%S')} - Copia su Binance/Bybit"""
     try:
-        r=requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id":TELEGRAM_CHAT_ID,"text":text,"parse_mode":"Markdown"}, timeout=5)
+        r=requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id":TELEGRAM_CHAT_ID,"text":text,"parse_mode":"Markdown","disable_web_page_preview":True}, timeout=5)
         if r.status_code==200:
             LAST_TELEGRAM[key]=now
-            print(f"[{rome_now()}] TG SENT {coin} {tf} {conf}%")
+            save_json(LAST_FILE, LAST_TELEGRAM)
+            print(f"[{rome_now()}] TG V59 {coin} {tf} {conf}% ADX{adx}")
             return {"ok":True,"sent":True}
         return {"ok":False,"error":r.text[:200]}
     except Exception as e:
@@ -124,6 +194,7 @@ def analyze(name, tf, do_tg=False, force_tg=False):
 
     ema9=ema_calc(closes,9); ema21=ema_calc(closes,21)
     rsi=rsi_calc(closes,14)
+    adx=adx_calc(ohlc, 14)
     lows=[c["low"] for c in ohlc]; highs=[c["high"] for c in ohlc]
     vols=[c["volume"] for c in ohlc]
     avg_vol=sum(vols[-20:])/20 if vols else 1
@@ -151,6 +222,11 @@ def analyze(name, tf, do_tg=False, force_tg=False):
     if vol_ratio>=0.8: points+=15
     else: points+=5
     if close_price>ema21: points+=10
+    # Bonus ADX
+    if adx>=25: points+=10
+    elif adx>=20: points+=5
+    else: points+=0
+
     conf=max(15,min(95,int(points)))
 
     swing_low=min(lows[-10:]); swing_high=max(highs[-10:])
@@ -173,15 +249,34 @@ def analyze(name, tf, do_tg=False, force_tg=False):
         color="wait"; label="ASPETTA"
         signal="ASPETTA"; sl=price*0.992; tp=price*1.015; sl_pct=0.8; tp_pct=1.5
 
-    extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source}"
-    data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text}
+    # --- FILTRI V59 PRO PER MIGLIORARE ---
+    filter_reason=""
+    if adx < 20 and color=="entra":
+        color="quasi"; label=f"QUASI - NO TREND ADX{adx}"
+        filter_reason=f"ADX{adx}<20 no trend"
+    if signal=="COMPRA" and rsi>72 and color=="entra":
+        color="quasi"; label=f"QUASI - RSI ALTO {rsi}"
+        filter_reason=f"RSI {rsi} ipercomprato"
+    if signal=="VENDI" and rsi<28 and color=="entra":
+        color="quasi"; label=f"QUASI - RSI BASSO {rsi}"
+        filter_reason=f"RSI {rsi} ipervenduto"
+
+    extra=f"{h1_text} • Vol x{vol_ratio:.1f} • ADX {adx} • {source}"
+    if filter_reason:
+        extra+=f" • ⛔ {filter_reason}"
+
+    data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"adx":adx,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 0,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text,"filter":filter_reason}
     tg_res=None
     if do_tg and color=="entra":
-        tg_res=send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, int(rsi), extra, force=force_tg)
+        tg_res=send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, int(rsi), adx, extra, force=force_tg)
     return data, tg_res
 
 @app.route("/")
-def home(): return Response(f"{VERSION} - {rome_now()} - COOLDOWN {COOLDOWN}s", mimetype="text/plain")
+def home(): return Response(f"{VERSION} - {rome_now()} - ADX FILTER ON", mimetype="text/plain")
+
+@app.route("/health")
+def health():
+    return jsonify({"ok":True,"version":VERSION,"time":rome_now().isoformat(),"telegram":TELEGRAM_ENABLED,"last":LAST_TELEGRAM})
 
 @app.route("/api/signals")
 def api_signals():
@@ -191,14 +286,14 @@ def api_signals():
     res={}; tg={}
     for name in PAIRS.keys():
         d,tr=analyze(name, tf, do_tg, force_tg=force)
-        if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"spark":[],"extra":"Carico..."}
+        if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"adx":25,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"spark":[],"extra":"Carico..."}
         res[name]=d
         if tr: tg[name]=tr
     return jsonify({"ok":True,"tf":tf,"coins":res,"telegram_results":tg,"telegram_enabled":TELEGRAM_ENABLED,"version":VERSION,"time":rome_now().isoformat()})
 
 @app.route("/api/telegram_test")
 def tg_test():
-    r=send_tg("BTC","5m","COMPRA",80,80000,79400,81200,0.7,1.5,"TEST",58,"Test LIGHT FINAL",force=True)
+    r=send_tg("BTC","5m","COMPRA",85,80000,79400,81200,0.7,1.5,"TEST",58,28,"Test V59 ADX+CHART",force=True)
     return jsonify(r)
 
 @app.route("/api/force_telegram")
@@ -207,23 +302,23 @@ def force_tg():
     for name in PAIRS.keys():
         p,_=get_price(name)
         if p is None: p=80000
-        out[name]=send_tg(name,"5m","COMPRA",90,p,p*0.995,p*1.01,0.5,1.0,"FORCE",58,"Force 90% LIGHT FINAL",force=True)
+        out[name]=send_tg(name,"5m","COMPRA",90,p,p*0.995,p*1.01,0.5,1.0,"FORCE",58,30,"Force V59 90%",force=True)
     return jsonify(out)
 
 @app.route("/api/telegram_config")
 def tg_config():
-    return jsonify({"enabled":TELEGRAM_ENABLED,"threshold":TELEGRAM_MIN_CONF,"cooldown":COOLDOWN,"last":LAST_TELEGRAM})
+    return jsonify({"enabled":TELEGRAM_ENABLED,"threshold":TELEGRAM_MIN_CONF,"cooldown":COOLDOWN,"last":LAST_TELEGRAM,"file_exists":os.path.exists(LAST_FILE)})
 
 @app.route("/app")
 def app_page():
     html="""
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V58 LIGHT FINAL</title>
+<title>VENDI V59 LIGHT PRO</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
 body{margin:0;background:#020617;color:#e2e8f0}
 .header{padding:14px 16px;display:flex;align-items:center;gap:12px;background:#0f172a;border-bottom:1px solid #1e293b;position:sticky;top:0;z-index:10}
-.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#16a34a);display:flex;align-items:center;justify-content:center;font-weight:900;color:#052e16}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#facc15);display:flex;align-items:center;justify-content:center;font-weight:900;color:#052e16}
 .badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:800}
 .badge-entra{background:#22c55e;color:#052e16;animation:glow 1s infinite alternate}
 .badge-quasi{background:#facc15;color:#422006}
@@ -246,20 +341,20 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .btn-blue{background:#0088cc;color:white}
 .btn-green{background:#16a34a;color:white}
 </style></head><body>
-<div class="header"><div class="logo">V58</div><div style="flex:1"><div style="font-weight:800">VENDI V58 <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:10px">LIGHT FINAL</span></div><div style="font-size:10px;color:#94a3b8">Solo segnali • TG su 5m+15m+1H • Cooldown 5 min • Fix 90%</div></div><div><button onclick="testTG()" style="background:#0088cc;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">📱 Test</button></div></div>
-<div id="banner" class="banner b-off">Verifico Telegram...</div>
-<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m</button><button id="b15m" onclick="loadTF('15m')">15m</button><button id="b1H" onclick="loadTF('1H')">1H</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG 90%</button><button onclick="loadTF('5m',true)" style="background:#0088cc;color:white">📱 Con TG</button></div>
-<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico segnali...</div></div>
-<div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">STOP LOSS</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TAKE PROFIT</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span></div></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia SL/TP</button><button class="btn btn-blue" onclick="sendNow()">📱 Manda Telegram ORA (bypassa cooldown)</button></div></div>
+<div class="header"><div class="logo">V59</div><div style="flex:1"><div style="font-weight:800">VENDI V59 <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:10px">LIGHT PRO</span></div><div style="font-size:10px;color:#94a3b8">ADX filtro no-trend + RSI estremo + Chart TG + Persist</div></div><div><button onclick="testTG()" style="background:#0088cc;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">📱 Test</button></div></div>
+<div id="banner" class="banner b-off">Verifico Telegram V59...</div>
+<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m PRO</button><button id="b15m" onclick="loadTF('15m')">15m PRO</button><button id="b1H" onclick="loadTF('1H')">1H PRO</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="loadTF('5m',true)" style="background:#0088cc;color:white">📱 Con TG</button></div>
+<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V59 PRO con filtro ADX...</div></div>
+<div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">STOP LOSS</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TAKE PROFIT</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span><br><span id="mRR" style="font-size:10px;color:#86efac"></span></div></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia SL/TP</button><button class="btn btn-blue" onclick="openChart()">📈 Apri TradingView</button><button class="btn btn-blue" onclick="sendNow()">📱 Manda Telegram ORA</button></div></div>
 <script>
 var curTF='5m';var lastData=null;var curCoin=null;
 function badge(c,l){if(c=='entra')return '<span class="badge badge-entra">'+l+'</span>';if(c=='quasi')return '<span class="badge badge-quasi">'+l+'</span>';return '<span class="badge badge-wait">'+l+'</span>';}
-async function checkTG(){try{let r=await fetch('/api/telegram_config');let j=await r.json();let b=document.getElementById('banner');if(j.enabled){b.className='banner b-on';b.innerHTML='✅ Telegram ON - Soglia 75% - Manda su 5m+15m+1H - Cooldown 5 min - Ultimo: '+JSON.stringify(j.last);}else{b.className='banner b-off';b.innerHTML='❌ Telegram OFF';}}catch{}}
+async function checkTG(){try{let r=await fetch('/api/telegram_config');let j=await r.json();let b=document.getElementById('banner');if(j.enabled){b.className='banner b-on';b.innerHTML='✅ V59 Telegram ON - ADX filtro ON - Soglia 75% - Cooldown 5m - Persist file: '+(j.file_exists?'✅':'❌')+' - Ultimo: '+JSON.stringify(j.last);}else{b.className='banner b-off';b.innerHTML='❌ Telegram OFF';}}catch{}}
 async function loadTF(tf,withTG=false,force=false){
 curTF=tf;
 document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
 let el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+(withTG?' + TG...':'...')+'</div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V59 PRO...'+(withTG?' + TG':'')+'</div>';
 try{
 let url='/api/signals?tf='+tf+(withTG?'&telegram=1':'')+(force?'&force=1':'');
 let r=await fetch(url); let d=await r.json(); lastData=d; checkTG();
@@ -270,17 +365,19 @@ let iclass=name=='BTC'?'btc':name=='ETH'?'eth':'oro';
 let b=badge(info.quality_color, info.quality_label);
 let price='$'+info.price.toFixed(2);
 let action=info.quality_color=='entra'?(info.signal=='COMPRA'?'🚀 COMPRA ORA':'🔻 VENDI ORA'):'⏸️ Aspetta';
-html+=`<div class="coin"><div class="coin-row" onclick="openM('${name}')"><div style="display:flex;gap:10px;align-items:center"><div class="icon ${iclass}">${name=='BTC'?'B':name=='ETH'?'E':'Au'}</div><div><b>${name}</b> - ${price}<div style="font-size:11px;color:#94a3b8">${info.extra}</div><div style="font-size:11px;color:#64748b">${action}</div></div></div><div style="text-align:right">${b}<div style="font-size:11px;color:#64748b;margin-top:4px">${info.signal} ${info.conf}%<br>SL ${info.sl_pct.toFixed(2)}% TP ${info.tp_pct.toFixed(2)}%</div></div></div></div>`;
+let adxBadge=info.adx<20?'⛔':'✅';
+html+=`<div class="coin"><div class="coin-row" onclick="openM('${name}')"><div style="display:flex;gap:10px;align-items:center"><div class="icon ${iclass}">${name=='BTC'?'B':name=='ETH'?'E':'Au'}</div><div><b>${name}</b> - ${price}<div style="font-size:11px;color:#94a3b8">${adxBadge} ADX ${info.adx} • ${info.extra}</div><div style="font-size:11px;color:#64748b">${action}</div></div></div><div style="text-align:right">${b}<div style="font-size:11px;color:#64748b;margin-top:4px">${info.signal} ${info.conf}%<br>SL ${info.sl_pct.toFixed(2)}% TP ${info.tp_pct.toFixed(2)}%<br>R:R 1:${info.rr}</div></div></div></div>`;
 }
 if(d.telegram_results && Object.keys(d.telegram_results).length>0){html+=`<div style="background:#052e16;padding:8px 12px;font-size:11px;color:#86efac;text-align:center">📱 Inviato TG: ${JSON.stringify(d.telegram_results)}</div>`;}
 document.getElementById('coins').innerHTML=html;
 }catch(e){document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444">Errore: '+e.message+'</div>';}
 }
-function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mExtra').textContent=info.extra; document.getElementById('modal').classList.add('show');}
+function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - ADX '+info.adx+' - TF '+curTF; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mRR').textContent='R:R 1:'+info.rr; document.getElementById('mExtra').textContent=info.extra; document.getElementById('modal').classList.add('show');}
 function closeM(){document.getElementById('modal').classList.remove('show');}
-function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} Entry ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} (${info.sl_pct.toFixed(2)}%) TP ${info.tp.toFixed(2)} (${info.tp_pct.toFixed(2)}%)`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato: '+txt));}
-async function sendNow(){if(!curCoin) return; try{let r=await fetch('/api/signals?tf='+curTF+'&telegram=1&force=1'); let j=await r.json(); alert('TG risultato: '+JSON.stringify(j.telegram_results[curCoin]||j.telegram_results));}catch(e){alert(e.message);}}
-async function testTG(){try{let r=await fetch('/api/telegram_test'); let j=await r.json(); alert(j.ok?'✅ Test inviato!':'❌ '+j.error);}catch(e){alert(e.message);}}
+function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} Entry ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} (${info.sl_pct.toFixed(2)}%) TP ${info.tp.toFixed(2)} (${info.tp_pct.toFixed(2)}%) R:R 1:${info.rr}`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato: '+txt));}
+function openChart(){if(!curCoin) return; let sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]; window.open('https://www.tradingview.com/chart/?symbol='+sym,'_blank');}
+async function sendNow(){if(!curCoin) return; try{let r=await fetch('/api/signals?tf='+curTF+'&telegram=1&force=1'); let j=await r.json(); alert('TG: '+JSON.stringify(j.telegram_results[curCoin]||j.telegram_results));}catch(e){alert(e.message);}}
+async function testTG(){try{let r=await fetch('/api/telegram_test'); let j=await r.json(); alert(j.ok?'✅ Test V59 inviato con ADX+Chart!':'❌ '+j.error);}catch(e){alert(e.message);}}
 checkTG();loadTF('5m');setInterval(()=>loadTF(curTF),15000);
 </script></body></html>
 """
@@ -293,7 +390,7 @@ def bg_loop():
                 for name in PAIRS.keys():
                     analyze(name, tf, do_tg=True)
         except Exception as e:
-            print(f"Loop {e}")
+            print(f"Loop V59 {e}")
         time.sleep(60)
 
 threading.Thread(target=bg_loop, daemon=True).start()
