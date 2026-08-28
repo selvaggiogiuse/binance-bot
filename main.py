@@ -12,14 +12,13 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 75
+TELEGRAM_MIN_CONF = 80  # V62: torniamo a 80% per più qualità
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V61 LOOSE STABLE - NO FUTURE BUG + STABLE ENTRA"
-COOLDOWN = 300
-# V61: niente file persistente, solo memoria - così il bug futuro non torna mai
+VERSION = "V62 STRICT HIGH WINRATE - TORNA AL SEMPLICE"
+COOLDOWN = 600  # 10 min per non spammare falsi
 LAST_TELEGRAM = {}
-LAST_ENTRA = {}  # key -> {time, data} per stabilizzare ENTRA 3 min
-STABLE_SECONDS = 180  # ENTRA rimane visibile 3 min anche se scende a QUASI
+LAST_ENTRA = {}
+STABLE_SECONDS = 180
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -93,18 +92,16 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
     key=f"{coin}_{tf}"
     now=time.time()
     last=LAST_TELEGRAM.get(key,0)
-    # FIX DEFINITIVO: se timestamp futuro, resetta subito
     if last > now + 10:
-        print(f"V61 FUTURE FIX RESET {key} {last} -> 0")
         last=0
         LAST_TELEGRAM[key]=0
     if not force and now - last < COOLDOWN:
-        return {"ok":False,"error":f"cooldown {int(COOLDOWN-(now-last))}s","key":key,"remaining":int(COOLDOWN-(now-last))}
+        return {"ok":False,"error":f"cooldown {int(COOLDOWN-(now-last))}s","key":key}
     emoji="🚀" if signal=="COMPRA" else "🔻"
     rr=tp_pct/sl_pct if sl_pct>0 else 0
     tv_sym={"BTC":"BINANCE:BTCUSDT","ETH":"BINANCE:ETHUSDT","ORO":"BINANCE:PAXGUSDT"}[coin]
     chart=f"https://www.tradingview.com/chart/?symbol={tv_sym}"
-    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V61 STABLE
+    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V62 STRICT
 
 💰 Entry: ${price:.2f} ({source})
 🎯 SL: ${sl:.2f} (-{sl_pct:.2f}%) | TP: ${tp:.2f} (+{tp_pct:.2f}%) R:R 1:{rr:.1f}
@@ -115,7 +112,6 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
         r=requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id":TELEGRAM_CHAT_ID,"text":text,"parse_mode":"Markdown","disable_web_page_preview":True}, timeout=5)
         if r.status_code==200:
             LAST_TELEGRAM[key]=now
-            print(f"V61 TG SENT {coin} {tf} {conf}%")
             return {"ok":True,"sent":True,"key":key}
         return {"ok":False,"error":r.text[:300]}
     except Exception as e:
@@ -125,6 +121,7 @@ def analyze(name, tf, do_tg=False, force_tg=False):
     global LAST_ENTRA
     ohlc, src = fetch_ohlc(name, tf, 200)
     ohlc_1h, _ = fetch_ohlc(name, "1H", 100)
+    ohlc_15m, _ = fetch_ohlc(name, "15m", 100) if tf=="5m" else ([], "")
     price, price_src = get_price(name)
     if not ohlc:
         if price is None: return None, None
@@ -133,7 +130,7 @@ def analyze(name, tf, do_tg=False, force_tg=False):
     close_price=closes[-1]
     if price is None: price=close_price
     source=price_src
-    ema9=ema_calc(closes,9); ema21=ema_calc(closes,21)
+    ema9=ema_calc(closes,9); ema21=ema_calc(closes,21); ema50=ema_calc(closes,50)
     rsi=rsi_calc(closes,14)
     lows=[c["low"] for c in ohlc]; highs=[c["high"] for c in ohlc]
     vols=[c["volume"] for c in ohlc]
@@ -142,42 +139,63 @@ def analyze(name, tf, do_tg=False, force_tg=False):
     vol_ratio=cur_vol/avg_vol if avg_vol>0 else 1
     try: stoch=int((close_price-min(lows[-14:]))/(max(highs[-14:])-min(lows[-14:]))*100)
     except: stoch=50
-    h1_text="1H --"
+
+    # 1H e 15m per conferma trend
+    h1_up=True; h1_rsi=50; m15_up=True
     if ohlc_1h and len(ohlc_1h)>=21:
         c1h=[c["close"] for c in ohlc_1h]
-        e21_1h=ema_calc(c1h,21); rsi_1h=rsi_calc(c1h,14)
-        h1_up=c1h[-1]>e21_1h
-        h1_text=f"1H {'UP' if h1_up else 'DOWN'} RSI{int(rsi_1h)}"
+        e21_1h=ema_calc(c1h,21); h1_up=c1h[-1]>e21_1h; h1_rsi=rsi_calc(c1h,14)
+    if ohlc_15m and len(ohlc_15m)>=21:
+        c15=[c["close"] for c in ohlc_15m]
+        e21_15=ema_calc(c15,21); m15_up=c15[-1]>e21_15
 
+    h1_text=f"1H {'UP' if h1_up else 'DOWN'} RSI{int(h1_rsi)}"
+
+    # V62 STRICT: pochi filtri ma forti
     points=0
-    if 50<=rsi<=65: points+=25
-    elif 45<=rsi<70: points+=18
+    # RSI ideale 52-68
+    if 52<=rsi<=62: points+=35
+    elif 48<=rsi<=68: points+=20
     else: points+=5
-    if close_price>ema9 and ema9>ema21: points+=30
-    elif close_price>ema9: points+=15
+    # EMA allineate
+    if close_price>ema9 and ema9>ema21 and ema21>ema50: points+=35
+    elif close_price>ema9 and ema9>ema21: points+=20
+    else: points+=0
+    # Stocastico non ipercomprato
+    if 25<=stoch<=65: points+=15
     else: points+=5
-    if 30<=stoch<=70: points+=20
-    else: points+=8
-    if vol_ratio>=0.8: points+=15
-    else: points+=5
-    if close_price>ema21: points+=10
+    # Volume forte
+    if vol_ratio>=1.2: points+=15
+    elif vol_ratio>=1.0: points+=8
+    else: points+=0
+
     conf=max(15,min(95,int(points)))
 
     swing_low=min(lows[-10:]); swing_high=max(highs[-10:])
     if close_price>ema21:
         sl_pct_raw=(price-swing_low*0.998)/price*100
-        sl_pct=max(0.5,min(2.0,sl_pct_raw))
+        sl_pct=max(0.5,min(1.2,sl_pct_raw))  # SL più stretto per vincere di più
         sl=price*(1-sl_pct/100); tp_pct=sl_pct*1.8; tp=price*(1+tp_pct/100)
         signal="COMPRA"
     else:
         sl_pct_raw=(swing_high*1.002-price)/price*100
-        sl_pct=max(0.5,min(2.0,sl_pct_raw))
+        sl_pct=max(0.5,min(1.2,sl_pct_raw))
         sl=price*(1+sl_pct/100); tp_pct=sl_pct*1.8; tp=price*(1-tp_pct/100)
         signal="VENDI"
 
-    if conf>=70 and vol_ratio>=0.7:
+    # FILTRO STRICT: serve conferma 15m e 1H per COMPRA
+    extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • V62 STRICT"
+    if signal=="COMPRA" and not (h1_up or m15_up):
+        # se 1H e 15m sono DOWN, abbassa conf
+        conf=max(15, conf-20)
+        extra+= " • ⚠️ 1H/15m DOWN - meno affidabile"
+    if signal=="VENDI" and (h1_up and m15_up):
+        conf=max(15, conf-20)
+        extra+= " • ⚠️ 1H/15m UP - meno affidabile"
+
+    if conf>=80 and vol_ratio>=1.0 and close_price>ema9 and ema9>ema21:
         color="entra"; label="ENTRA"
-    elif conf>=60:
+    elif conf>=68:
         color="quasi"; label="QUASI"
     else:
         color="wait"; label="ASPETTA"
@@ -185,19 +203,13 @@ def analyze(name, tf, do_tg=False, force_tg=False):
 
     key=f"{name}_{tf}"
     now=time.time()
-    extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • V61 STABLE"
-    # STABILIZZAZIONE: se ora è QUASI ma 1-2 min fa era ENTRA, mantieni ENTRA per 3 min
+    data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 0,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text}
+
+    # stabilizza 3 min
     if key in LAST_ENTRA:
         prev=LAST_ENTRA[key]
         if now - prev["time"] < STABLE_SECONDS and prev["data"]["quality_color"]=="entra" and color!="entra":
-            # Mantieni ENTRA precedente per stabilità
-            prev_data=prev["data"]
-            prev_data["extra"] = prev_data["extra"] + f" • STABILE ({int(now-prev['time'])}s fa era {prev_data['conf']}%)"
-            # Ma non rimandare Telegram se già inviato
-            return prev_data, None
-
-    data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 0,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text}
-    # Salva se ENTRA
+            return prev["data"], None
     if color=="entra":
         LAST_ENTRA[key]={"time":now,"data":data}
 
@@ -207,32 +219,23 @@ def analyze(name, tf, do_tg=False, force_tg=False):
     return data, tg_res
 
 @app.route("/")
-def home(): return Response(f"{VERSION} - {rome_now()} - STABLE", mimetype="text/plain")
+def home(): return Response(f"{VERSION} - {rome_now()}", mimetype="text/plain")
 @app.route("/health")
-def health(): return jsonify({"ok":True,"version":VERSION,"time":rome_now().isoformat(),"telegram":TELEGRAM_ENABLED,"last":LAST_TELEGRAM,"last_entra":list(LAST_ENTRA.keys()),"now":time.time()})
-
+def health(): return jsonify({"ok":True,"version":VERSION,"time":rome_now().isoformat(),"telegram":TELEGRAM_ENABLED,"last":LAST_TELEGRAM,"now":time.time()})
 @app.route("/api/nuke")
 def nuke():
     global LAST_TELEGRAM, LAST_ENTRA
-    LAST_TELEGRAM={}
-    LAST_ENTRA={}
-    # cancella anche file vecchio se esiste
-    for f in ["last_telegram.json","last_telegram.json.bak"]:
-        try:
-            if os.path.exists(f): os.remove(f)
-        except: pass
-    return jsonify({"ok":True,"nuked":True,"msg":"Tutti i cooldown e file futuri cancellati - ora V61 non usa più file","now":time.time()})
-
-@app.route("/api/clear_telegram")
-def clear_tg():
-    global LAST_TELEGRAM
-    LAST_TELEGRAM={}
+    LAST_TELEGRAM={}; LAST_ENTRA={}
     for f in ["last_telegram.json"]:
         try:
             if os.path.exists(f): os.remove(f)
         except: pass
+    return jsonify({"ok":True,"nuked":True,"now":time.time()})
+@app.route("/api/clear_telegram")
+def clear_tg():
+    global LAST_TELEGRAM
+    LAST_TELEGRAM={}
     return jsonify({"ok":True,"cleared":True,"now":time.time()})
-
 @app.route("/api/signals")
 def api_signals():
     tf=request.args.get("tf","5m")
@@ -245,32 +248,28 @@ def api_signals():
         res[name]=d
         if tr: tg[name]=tr
     return jsonify({"ok":True,"tf":tf,"coins":res,"telegram_results":tg,"telegram_enabled":TELEGRAM_ENABLED,"version":VERSION,"time":rome_now().isoformat()})
-
 @app.route("/api/telegram_test")
 def tg_test():
-    r=send_tg("BTC","5m","COMPRA",81,80000,79400,81200,0.7,1.5,"TEST",35,"Test V61 STABLE",force=True)
+    r=send_tg("BTC","5m","COMPRA",85,80000,79400,81200,0.7,1.5,"TEST",55,"Test V62 STRICT",force=True)
     return jsonify(r)
-
 @app.route("/api/force_telegram")
 def force_tg():
     out={}
     for name in PAIRS.keys():
         p,_=get_price(name)
         if p is None: p=80000
-        out[name]=send_tg(name,"5m","COMPRA",81,p,p*0.995,p*1.01,0.5,0.9,"FORCE V61",35,"Force V61 STABLE",force=True)
+        out[name]=send_tg(name,"5m","COMPRA",85,p,p*0.995,p*1.01,0.5,0.9,"FORCE V62",55,"Force V62 STRICT",force=True)
     return jsonify(out)
-
 @app.route("/api/telegram_config")
 def tg_config():
     now=time.time()
     future=[k for k,v in LAST_TELEGRAM.items() if v>now+10]
     return jsonify({"enabled":TELEGRAM_ENABLED,"threshold":TELEGRAM_MIN_CONF,"cooldown":COOLDOWN,"last":LAST_TELEGRAM,"now":now,"future_keys":future,"stable_keys":list(LAST_ENTRA.keys())})
-
 @app.route("/app")
 def app_page():
     html="""
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V61 STABLE</title>
+<title>VENDI V62 STRICT</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
 body{margin:0;background:#020617;color:#e2e8f0}
@@ -297,23 +296,22 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .btn{width:100%;padding:12px;border-radius:10px;border:none;font-weight:800;cursor:pointer;margin-top:8px}
 .btn-blue{background:#0088cc;color:white}
 .btn-green{background:#16a34a;color:white}
-.btn-red{background:#dc2626;color:white}
 </style></head><body>
-<div class="header"><div class="logo">V61</div><div style="flex:1"><div style="font-weight:800">VENDI V61 <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:10px">STABLE + NO FUTURE BUG</span></div><div style="font-size:10px;color:#94a3b8">Fix Telegram + ENTRA stabile 3 min • Max trade</div></div><div><button onclick="testTG()" style="background:#0088cc;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">📱 Test</button></div></div>
-<div id="banner" class="banner b-off">Verifico V61 STABLE...</div>
-<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m STABLE</button><button id="b15m" onclick="loadTF('15m')">15m</button><button id="b1H" onclick="loadTF('1H')">1H</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
-<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V61 STABLE...</div></div>
+<div class="header"><div class="logo">V62</div><div style="flex:1"><div style="font-weight:800">VENDI V62 <span style="background:#facc15;color:#422006;padding:2px 6px;border-radius:6px;font-size:10px">STRICT HIGH WINRATE</span></div><div style="font-size:10px;color:#94a3b8">Torna al semplice - 80% + Vol x1.0 + EMA50 + conferma 15m/1H</div></div><div><button onclick="testTG()" style="background:#0088cc;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">📱 Test</button></div></div>
+<div id="banner" class="banner b-off">Verifico V62 STRICT...</div>
+<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m STRICT</button><button id="b15m" onclick="loadTF('15m')">15m</button><button id="b1H" onclick="loadTF('1H')">1H</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
+<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V62 STRICT...</div></div>
 <div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">STOP LOSS</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TAKE PROFIT</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span><br><span id="mRR" style="font-size:10px;color:#86efac"></span></div></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia SL/TP</button><button class="btn btn-blue" onclick="openChart()">📈 TradingView</button><button class="btn btn-blue" onclick="sendNow()">📱 Manda Telegram ORA</button></div></div>
 <script>
 var curTF='5m';var lastData=null;var curCoin=null;
 function badge(c,l){if(c=='entra')return '<span class="badge badge-entra">'+l+'</span>';if(c=='quasi')return '<span class="badge badge-quasi">'+l+'</span>';return '<span class="badge badge-wait">'+l+'</span>';}
-async function checkTG(){try{let r=await fetch('/api/telegram_config');let j=await r.json();let b=document.getElementById('banner');if(j.enabled){let warn=j.future_keys&&j.future_keys.length>0?' ⚠️ FUTURO: '+j.future_keys.join(',')+' - Premi NUKE!':'';b.className='banner '+(warn?'b-off':'b-on');b.innerHTML='✅ V61 STABLE ON - Soglia 75% - Fix futuro + ENTRA stabile 3min - Ultimo: '+JSON.stringify(j.last)+warn+' - Stabili: '+j.stable_keys.length;}else{b.className='banner b-off';b.innerHTML='❌ Telegram OFF';}}catch{}}
-async function nuke(){if(!confirm('💣 NUKE: cancello tutto, file e cooldown? Così BTC 80% partirà subito su Telegram!'))return;try{let r=await fetch('/api/nuke');let j=await r.json();alert('✅ NUKE fatto! Ora premi Forza TG');checkTG();loadTF(curTF);}catch(e){alert(e.message);}}
+async function checkTG(){try{let r=await fetch('/api/telegram_config');let j=await r.json();let b=document.getElementById('banner');if(j.enabled){let warn=j.future_keys&&j.future_keys.length>0?' ⚠️ FUTURO: '+j.future_keys.join(','):' ';b.className='banner '+(warn?'b-off':'b-on');b.innerHTML='✅ V62 STRICT ON - Soglia 80% - Vol x1.0 + EMA50 + conf 15m/1H - Cooldown 10min - Stabili: '+j.stable_keys.length+warn;}else{b.className='banner b-off';b.innerHTML='❌ Telegram OFF';}}catch{}}
+async function nuke(){if(!confirm('NUKE?'))return;try{let r=await fetch('/api/nuke');alert('✅ NUKE');checkTG();loadTF(curTF);}catch(e){alert(e.message);}}
 async function loadTF(tf,withTG=false,force=false){
 curTF=tf;
 document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
 let el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V61 STABLE...'+(withTG?' + TG':'')+'</div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V62 STRICT...'+(withTG?' + TG':'')+'</div>';
 try{
 let url='/api/signals?tf='+tf+(withTG?'&telegram=1':'')+(force?'&force=1':'');
 let r=await fetch(url); let d=await r.json(); lastData=d; checkTG();
@@ -335,7 +333,7 @@ function closeM(){document.getElementById('modal').classList.remove('show');}
 function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} Entry ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} (${info.sl_pct.toFixed(2)}%) TP ${info.tp.toFixed(2)} (${info.tp_pct.toFixed(2)}%) R:R 1:${info.rr}`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato: '+txt));}
 function openChart(){if(!curCoin) return; let sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]; window.open('https://www.tradingview.com/chart/?symbol='+sym,'_blank');}
 async function sendNow(){if(!curCoin) return; try{let r=await fetch('/api/signals?tf='+curTF+'&telegram=1&force=1'); let j=await r.json(); alert('TG: '+JSON.stringify(j.telegram_results[curCoin]||j.telegram_results));}catch(e){alert(e.message);}}
-async function testTG(){try{let r=await fetch('/api/telegram_test'); let j=await r.json(); alert(j.ok?'✅ Test V61 STABLE!':'❌ '+j.error);}catch(e){alert(e.message);}}
+async function testTG(){try{let r=await fetch('/api/telegram_test'); let j=await r.json(); alert(j.ok?'✅ Test V62 STRICT!':'❌ '+j.error);}catch(e){alert(e.message);}}
 checkTG();loadTF('5m');setInterval(()=>loadTF(curTF),15000);
 </script></body></html>
 """
@@ -348,7 +346,7 @@ def bg_loop():
                 for name in PAIRS.keys():
                     analyze(name, tf, do_tg=True)
         except Exception as e:
-            print(f"Loop V61 {e}")
+            print(f"Loop V62 {e}")
         time.sleep(60)
 
 threading.Thread(target=bg_loop, daemon=True).start()
