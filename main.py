@@ -493,7 +493,7 @@ def check_pending_trades():
         if not price: continue
         if t["signal"]=="COMPRA":
             if price>=t["tp"]: t["result"]="WIN"; t["pnl_pct"]=(t["tp"]-t["entry"])/t["entry"]*100; RISK_CONFIG["daily_losses_row"]=0
-            elif price<=t["sl"]: t["result"]="LOSS"; t["pnl_pct"]= -abs((t["entry"]-t["sl"])/t["entry"]*100; RISK_CONFIG["daily_losses_row"]+=1
+            elif price<=t["sl"]: t["result"]="LOSS"; t["pnl_pct"]= -abs((t["entry"]-t["sl"])/t["entry"]*100); RISK_CONFIG["daily_losses_row"]+=1
         else:
             if price<=t["tp"]: t["result"]="WIN"; t["pnl_pct"]=(t["entry"]-t["tp"])/t["entry"]*100; RISK_CONFIG["daily_losses_row"]=0
             elif price>=t["sl"]: t["result"]="LOSS"; t["pnl_pct"]= -abs((t["sl"]-t["entry"])/t["entry"]*100); RISK_CONFIG["daily_losses_row"]+=1
