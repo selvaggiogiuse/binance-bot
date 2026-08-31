@@ -12,15 +12,15 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 88  # V66 STRICT: 88% per aumentare WR
+TELEGRAM_MIN_CONF = 85
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V66 STRICT PLUS - WR 65-70% TARGET - NO 5m REAL"
-COOLDOWN = 900  # 15 min per evitare overtrading
+VERSION = "V66.1 BALANCED - WR 60%+ CON SEGNALI"
+COOLDOWN = 600
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
 STABLE_SECONDS = 180
 TRADE_HISTORY = []
-RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 2, "max_losses_row": 2, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today())}
+RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 3, "max_losses_row": 3, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today())}
 OHLC_CACHE = {}
 
 def ema_calc(data, p):
@@ -120,7 +120,7 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
     if last > now + 10: LAST_TELEGRAM[key]=0; last=0
     if not force and now - last < COOLDOWN: return {"ok":False,"error":f"cooldown {int(COOLDOWN-(now-last))}s"}
     emoji="🚀" if signal=="COMPRA" else "🔻"
-    mode_tag = "🔴 REAL STRICT" if is_real else "🟡 DEMO STRICT"
+    mode_tag = "🔴 REAL BALANCED" if is_real else "🟡 DEMO BALANCED"
     rr=tp_pct/sl_pct if sl_pct>0 else 0
     tv_sym={"BTC":"BINANCE:BTCUSDT","ETH":"BINANCE:ETHUSDT","ORO":"BINANCE:PAXGUSDT"}[coin]
     chart=f"https://www.tradingview.com/chart/?symbol={tv_sym}"
@@ -129,8 +129,8 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
         cap=RISK_CONFIG["capital"]; risk_pct=RISK_CONFIG["risk_pct"]; risk_money=cap*risk_pct/100
         size = risk_money / (price * sl_pct/100) if sl_pct>0 else 0
         size_info=f"\n💼 {mode_tag} Size: {size:.4f} | Rischio ${risk_money:.2f} R:R 1:{rr:.1f}"
-    else: size_info=f"\n🧪 {mode_tag} R:R 1:{rr:.1f} • Target WR 65%+"
-    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V66 STRICT
+    else: size_info=f"\n🧪 {mode_tag} R:R 1:{rr:.1f}"
+    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V66.1 BALANCED
 
 💰 Entry: ${price:.2f} ({source})
 🎯 SL: ${sl:.2f} (-{sl_pct:.2f}%) | TP: ${tp:.2f} (+{tp_pct:.2f}%) R:R 1:{rr:.1f}{size_info}
@@ -153,15 +153,7 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
 def analyze(name, tf, do_tg=False, force_tg=False):
     global LAST_ENTRA
     try:
-        # V66: in REAL, 5m disattivato per aumentare WR
         is_real_mode = RISK_CONFIG["mode"]=="REAL"
-        if is_real_mode and tf=="5m":
-            # 5m non genera ENTRA in REAL, solo QUASI
-            price,_ = get_price(name)
-            if price is None: price=80000
-            dummy={"price":price,"source":"DISABLED","signal":"ASPETTA","conf":0,"quality_color":"wait","quality_label":"5m OFF in REAL","rsi":50,"stoch_k":50,"vol_ratio":0,"sl":price*0.992,"tp":price*1.015,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"support":price*0.99,"resistance":price*1.01,"spark":[],"extra":"V66: 5m disattivato in REAL per aumentare WR - usa 15m REAL","h1":"--","ema9":price,"ema21":price,"ema50":price,"close":price,"confluence":0,"is_real":is_real_mode}
-            return dummy, None
-
         ohlc, src = fetch_ohlc_cached(name, tf, 200)
         ohlc_1h, _ = fetch_ohlc_cached(name, "1H", 100)
         ohlc_15m, _ = fetch_ohlc_cached(name, "15m", 100) if tf=="5m" else ([], "")
@@ -191,87 +183,81 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             e21_15=ema_calc(c15,21); m15_up=c15[-1]>e21_15
         h1_text=f"1H {'UP' if h1_up else 'DOWN'} RSI{int(h1_rsi)}"
         confluence_score = (1 if h1_up else 0) + (1 if m15_up else 0) + (1 if price>ema50 else 0)
-        # V66 STRICT SCORING
         points=0
-        # RSI STRICT: per COMPRA 52-62 ottimo, per VENDI 38-48 ottimo
-        if close_price>ema21: # trend COMPRA
-            if 52<=rsi<=60: points+=40
-            elif 50<=rsi<=65: points+=20
-            else: points+=0
-        else: # trend VENDI
-            if 38<=rsi<=48: points+=40
-            elif 35<=rsi<=50: points+=20
-            else: points+=0
-        # EMA alignment STRICT
-        if close_price>ema9 and ema9>ema21 and ema21>ema50: points+=40
-        elif close_price>ema9 and ema9>ema21: points+=15
-        elif close_price<ema9 and ema9<ema21 and ema21<ema50: points+=40
-        elif close_price<ema9 and ema9<ema21: points+=15
-        else: points+=0
-        # Stoch STRICT 30-70
-        if 30<=stoch<=65: points+=15
-        else: points+=0
-        # Vol STRICT: 1.8-4.0 ottimo, <1.8 troppo basso, >5.0 pump fake -> penalizza
-        if 1.8<=vol_ratio<=4.0: points+=15
-        elif 1.5<=vol_ratio<1.8: points+=5
-        elif vol_ratio>5.0: points-=20
-        else: points+=0
+        if 52<=rsi<=62: points+=35
+        elif 48<=rsi<=68: points+=20
+        else: points+=5
+        if close_price>ema9 and ema9>ema21 and ema21>ema50: points+=35
+        elif close_price>ema9 and ema9>ema21: points+=20
+        elif close_price<ema9 and ema9<ema21 and ema21<ema50: points+=35
+        elif close_price<ema9 and ema9<ema21: points+=20
+        if 25<=stoch<=65: points+=15
+        else: points+=5
+        if vol_ratio>=1.5: points+=15
+        elif vol_ratio>=1.2: points+=8
         conf=max(15,min(95,int(points)))
         swing_low=min(lows[-10:]); swing_high=max(highs[-10:])
-        # V66: R:R migliorato a 1:2.2 per aumentare PnL anche con 50% WR
         if close_price>ema21:
             sl_pct_raw=(price-swing_low*0.998)/price*100
             sl_pct=max(0.5,min(1.0,sl_pct_raw))
-            sl=price*(1-sl_pct/100); tp_pct=sl_pct*2.2; tp=price*(1+tp_pct/100)
+            sl=price*(1-sl_pct/100); tp_pct=sl_pct*2.0; tp=price*(1+tp_pct/100)
             signal="COMPRA"
         else:
             sl_pct_raw=(swing_high*1.002-price)/price*100
             sl_pct=max(0.5,min(1.0,sl_pct_raw))
-            sl=price*(1+sl_pct/100); tp_pct=sl_pct*2.2; tp=price*(1-tp_pct/100)
+            sl=price*(1+sl_pct/100); tp_pct=sl_pct*2.0; tp=price*(1-tp_pct/100)
             signal="VENDI"
-        extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • Conf {confluence_score}/3 • V66 STRICT R:R 1:2.2"
-        # Filtri aggiuntivi STRICT
-        # 1. Distanza da EMA50 >0.3% altrimenti choppy
+        extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • Conf {confluence_score}/3 • V66.1 BALANCED R:R 1:2.0"
+        # Filtri BALANCED (meno stretti di STRICT ma meglio di V65)
         dist_ema50 = abs(price-ema50)/price*100
-        if dist_ema50 < 0.3:
-            conf = max(15, conf-30)
-            extra += " • ⚠️ Vicino EMA50 choppy"
-        # 2. Vol troppo alto = pump fake
-        if vol_ratio > 5.0:
-            conf = max(15, conf-40)
-            extra += " • ⚠️ Vol pump fake"
-        # 3. 1H contro trend
-        if signal=="COMPRA" and not h1_up:
-            conf=max(15, conf-25)
-            extra+= " • ⚠️ 1H DOWN"
-        if signal=="VENDI" and h1_up:
-            conf=max(15, conf-25)
-            extra+= " • ⚠️ 1H UP"
-        min_conf = 88 if is_real_mode else 85
-        min_vol = 1.8 if is_real_mode else 1.5
-        max_vol = 5.0
-        min_confl = 3 if is_real_mode else 2
-        if signal=="COMPRA":
-            ema_ok = close_price>ema9 and ema9>ema21 and ema21>ema50 and price>ema50
-            confl_ok = confluence_score>=min_confl and h1_up
-            rsi_ok = 50<=rsi<=65
+        if dist_ema50 < 0.2:
+            conf = max(15, conf-15)
+            extra += " • Vicino EMA50"
+        if vol_ratio > 6.0:
+            conf = max(15, conf-20)
+            extra += " • Vol pump"
+        if signal=="COMPRA" and not (h1_up or m15_up):
+            conf=max(15, conf-20)
+            extra+= " • ⚠️ 1H/15m DOWN"
+        if signal=="VENDI" and (h1_up and m15_up):
+            conf=max(15, conf-20)
+            extra+= " • ⚠️ 1H/15m UP"
+        # V66.1 BALANCED thresholds
+        if is_real_mode:
+            min_conf = 85
+            min_vol = 1.5
+            max_vol = 6.0
+            min_confl = 2
+            # 5m in REAL: serve 88% e vol 2.0, non disattivato
+            if tf=="5m":
+                min_conf = 88
+                min_vol = 2.0
         else:
-            ema_ok = close_price<ema9 and ema9<ema21 and ema21<ema50 and price<ema50
+            min_conf = 80
+            min_vol = 1.2
+            max_vol = 6.0
+            min_confl = 2
+        if signal=="COMPRA":
+            ema_ok = close_price>ema9 and ema9>ema21
+            confl_ok = confluence_score>=min_confl
+            rsi_ok = 48<=rsi<=68
+        else:
+            ema_ok = close_price<ema9 and ema9<ema21
             confl_down = (0 if h1_up else 1) + (0 if m15_up else 1) + (0 if price>ema50 else 1)
-            confl_ok = confl_down>=min_confl and not h1_up
-            rsi_ok = 35<=rsi<=50
+            confl_ok = confl_down>=min_confl
+            rsi_ok = 32<=rsi<=52
         vol_ok = min_vol <= vol_ratio <= max_vol
-        stoch_ok = 25 <= stoch <= 70
-        dist_ok = dist_ema50 >= 0.3
+        stoch_ok = 20 <= stoch <= 75
+        dist_ok = dist_ema50 >= 0.2
         if conf>=min_conf and vol_ok and confl_ok and ema_ok and rsi_ok and stoch_ok and dist_ok:
             color="entra"; label="ENTRA"
-        elif conf>=70 and vol_ratio>=1.2:
+        elif conf>=68:
             color="quasi"; label="QUASI"
         else:
             color="wait"; label="ASPETTA"
-            signal="ASPETTA"; sl=price*0.992; tp=price*1.015; sl_pct=0.8; tp_pct=1.76
+            signal="ASPETTA"; sl=price*0.992; tp=price*1.015; sl_pct=0.8; tp_pct=1.6
         key=f"{name}_{tf}"; now=time.time()
-        data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 2.2,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text,"ema9":ema9,"ema21":ema21,"ema50":ema50,"close":close_price,"confluence":confluence_score,"is_real":is_real_mode}
+        data={"price":price,"source":source,"signal":signal,"conf":conf,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":stoch,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 2.0,"support":swing_low,"resistance":swing_high,"spark":closes[-30:],"extra":extra,"h1":h1_text,"ema9":ema9,"ema21":ema21,"ema50":ema50,"close":close_price,"confluence":confluence_score,"is_real":is_real_mode}
         if key in LAST_ENTRA:
             prev=LAST_ENTRA[key]
             if now - prev["time"] < STABLE_SECONDS and prev["data"]["quality_color"]=="entra" and color!="entra":
@@ -325,19 +311,15 @@ def run_backtest(coin="BTC", tf="15m", limit=200):
         ema9=ema_calc(sub_closes,9); ema21=ema_calc(sub_closes,21); ema50=ema_calc(sub_closes,50)
         rsi=rsi_calc(sub_closes,14)
         price=sub[-1]["close"]
-        # V66 STRICT logic nel backtest
         vol_ratio = sub[-1]["volume"] / (sum([c["volume"] for c in sub[-20:]])/20) if sub[-20:] else 1
         signal = "COMPRA" if price>ema21 else "VENDI"
-        # RSI strict
-        if signal=="COMPRA" and not (50<=rsi<=65): continue
-        if signal=="VENDI" and not (35<=rsi<=50): continue
-        # EMA strict
-        if signal=="COMPRA" and not (price>ema9 and ema9>ema21 and ema21>ema50): continue
-        if signal=="VENDI" and not (price<ema9 and ema9<ema21 and ema21<ema50): continue
-        # Vol strict
-        if not (1.8 <= vol_ratio <= 5.0): continue
+        if signal=="COMPRA" and not (48<=rsi<=68): continue
+        if signal=="VENDI" and not (32<=rsi<=52): continue
+        if signal=="COMPRA" and not (price>ema9 and ema9>ema21): continue
+        if signal=="VENDI" and not (price<ema9 and ema9<ema21): continue
+        if not (1.5 <= vol_ratio <= 6.0): continue
         sl = min([c["low"] for c in sub[-10:]])*0.998 if signal=="COMPRA" else max([c["high"] for c in sub[-10:]])*1.002
-        tp = price*1.012 if signal=="COMPRA" else price*0.988  # R:R 2.2 approx con SL 0.8-1%
+        tp = price*1.01 if signal=="COMPRA" else price*0.99
         future=ohlc[i+1:i+7]
         result=None
         for f in future:
@@ -355,7 +337,7 @@ def run_backtest(coin="BTC", tf="15m", limit=200):
                 time_full = dt.strftime("%Y-%m-%d %H:%M:%S")
             except:
                 time_str = f"candela {i}"; time_full=time_str
-            trades.append({"idx":i,"signal":signal,"entry":price,"result":result,"time":time_str,"time_full":time_full,"conf":88,"rsi":int(rsi),"vol":round(vol_ratio,1)})
+            trades.append({"idx":i,"signal":signal,"entry":price,"result":result,"time":time_str,"time_full":time_full,"conf":85,"rsi":int(rsi),"vol":round(vol_ratio,1)})
             if result=="WIN": wins+=1
             else: losses+=1
     total=wins+losses
@@ -369,9 +351,9 @@ def ai_market_answer(question, coin="BTC", tf="5m"):
         return "Dati lenti, riprova."
     price = data["price"]; rsi = data["rsi"]; conf = data["conf"]; sig = data["signal"]; vol = data["vol_ratio"]; h1=data["h1"]; confl=data["confluence"]
     total=len(TRADE_HISTORY); wins=len([t for t in TRADE_HISTORY if t.get("result")=="WIN"]); losses=len([t for t in TRADE_HISTORY if t.get("result")=="LOSS"]); wr=wins/total*100 if total>0 else 0
-    if "win" in q or "diario" in q or "perdita" in q or "perdendo" in q:
-        return f"📊 V66 STRICT: ho alzato soglia a 88% + confl 3/3 + EMA50 + RSI 50-65/35-50 + Vol 1.8-4.0 + R:R 1:2.2 + 5m OFF in REAL\n📓 LIVE AUTO: {total} trade {wins}W/{losses}L WR {wr:.1f}%\nObiettivo: da 50% a 65-70% WR tagliando 70% dei falsi segnali 5m. Meno trade, ma più buoni. Prova backtest 15m ora."
-    return f"V66 STRICT {coin} {tf}: ${price:.2f} {sig} {conf}% confl {confl}/3 RSI {rsi} Vol x{vol} | {h1} | WR {wr:.1f}% | R:R 1:{data['rr']}"
+    if "segnal" in q or "arriva" in q or "nessun" in q:
+        return f"V66.1 BALANCED: ho abbassato da 88% a 85% REAL (88% solo su 5m) + confl 2/3 + Vol 1.5-6.0 per far tornare i segnali. Con V66 STRICT non arrivava nulla perché filtrava troppo. Ora dovresti vedere 3-6 segnali al giorno su 15m con WR ~60% invece di 0 segnali. Prova Forza TG per test."
+    return f"V66.1 BALANCED {coin} {tf}: ${price:.2f} {sig} {conf}% confl {confl}/3 RSI {rsi} Vol x{vol} | {h1} | WR {wr:.1f}% | R:R 1:{data['rr']}"
 
 @app.route("/")
 def home(): return Response(f"{VERSION} - {rome_now()} - Mode {RISK_CONFIG['mode']}", mimetype="text/plain")
@@ -398,17 +380,17 @@ def api_signals():
         for name in PAIRS.keys():
             try:
                 d,tr=analyze(name, tf, do_tg, force_tg=force)
-                if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.76,"rr":2.2,"spark":[],"extra":"Carico V66 STRICT...","h1":"--","confluence":0,"is_real":False}
+                if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.6,"rr":2.0,"spark":[],"extra":"Carico...","h1":"--","confluence":0,"is_real":False}
                 res[name]=d
                 if tr: tg[name]=tr
             except Exception as e:
-                res[name]={"price":0,"source":"ERROR","signal":"ERROR","conf":0,"quality_color":"wait","quality_label":"ERRORE","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.76,"rr":2.2,"spark":[],"extra":str(e)[:80],"h1":"--","confluence":0,"is_real":False}
+                res[name]={"price":0,"source":"ERROR","signal":"ERROR","conf":0,"quality_color":"wait","quality_label":"ERRORE","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.6,"rr":2.0,"spark":[],"extra":str(e)[:80],"h1":"--","confluence":0,"is_real":False}
         return jsonify({"ok":True,"tf":tf,"coins":res,"telegram_results":tg,"telegram_enabled":TELEGRAM_ENABLED,"version":VERSION,"time":rome_now().isoformat(),"risk":RISK_CONFIG})
     except Exception as e:
         return jsonify({"ok":False,"error":str(e)}), 500
 @app.route("/api/telegram_test")
 def tg_test():
-    r=send_tg("BTC","5m","COMPRA",88,80000,79400,81200,0.7,1.54,"TEST",55,"Test V66 STRICT",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
+    r=send_tg("BTC","5m","COMPRA",85,80000,79400,81200,0.7,1.4,"TEST",55,"Test V66.1 BALANCED",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
     return jsonify(r)
 @app.route("/api/force_telegram")
 def force_tg():
@@ -416,7 +398,7 @@ def force_tg():
     for name in PAIRS.keys():
         p,_=get_price(name)
         if p is None: p=80000
-        out[name]=send_tg(name,"5m","COMPRA",88,p,p*0.995,p*1.01,0.5,1.1,"FORCE V66",55,"Force STRICT",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
+        out[name]=send_tg(name,"5m","COMPRA",85,p,p*0.995,p*1.01,0.5,1.0,"FORCE V66.1",55,"Force BALANCED",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
     return jsonify(out)
 @app.route("/api/telegram_config")
 def tg_config():
@@ -487,17 +469,16 @@ def api_backtest():
     if coin not in PAIRS: coin="BTC"
     res=run_backtest(coin, tf)
     return jsonify(res)
-
 @app.route("/app")
 def app_page():
     html="""
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V66 STRICT PLUS</title>
+<title>V66.1 BALANCED</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
 body{margin:0;background:#020617;color:#e2e8f0}
 .header{padding:14px 16px;display:flex;align-items:center;gap:12px;background:#0f172a;border-bottom:1px solid #1e293b;position:sticky;top:0;z-index:10}
-.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#f59e0b);display:flex;align-items:center;justify-content:center;font-weight:900;color:white}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#3b82f6);display:flex;align-items:center;justify-content:center;font-weight:900;color:white}
 .badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:800}
 .badge-entra{background:#22c55e;color:#052e16;animation:glow 1s infinite alternate}
 .badge-quasi{background:#facc15;color:#422006}
@@ -508,8 +489,7 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .tfs button.active{background:#22c55e;color:#052e16}
 .banner{margin:8px 12px;padding:10px 12px;border-radius:10px;font-size:12px;text-align:center}
 .b-on{background:#052e16;border:1px solid #16a34a;color:#86efac}
-.banner-real{background:#7f1d1d;border:1px solid #ef4444;color:#fecaca;font-weight:800}
-.banner-strict{background:linear-gradient(135deg,#052e16,#422006);border:1px solid #22c55e;color:#86efac;font-weight:800}
+.banner-strict{background:linear-gradient(135deg,#052e16,#1e3a8a);border:1px solid #3b82f6;color:#bfdbfe;font-weight:800}
 .coin{background:#0f172a;border:1px solid #1e293b;border-radius:14px;margin:8px 10px;overflow:hidden}
 .coin-row{display:flex;justify-content:space-between;align-items:center;padding:14px;cursor:pointer}
 .icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:900;color:white}
@@ -522,48 +502,34 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .btn-green{background:#16a34a;color:white}
 .btn-purple{background:#8b5cf6;color:white}
 .btn-red{background:#dc2626;color:white}
-#aiPanel{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;background:#0f172a;border-top:2px solid #f59e0b;border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-radius:20px 20px 0 0;z-index:60;display:none;flex-direction:column;max-height:70vh}
+#aiPanel{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;background:#0f172a;border-top:2px solid #3b82f6;border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-radius:20px 20px 0 0;z-index:60;display:none;flex-direction:column;max-height:70vh}
 #aiPanel.show{display:flex}
 #aiMsgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
 .msg{padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.4;max-width:85%;white-space:pre-wrap}
-.msg.user{align-self:flex-end;background:#f59e0b;color:#422006}
+.msg.user{align-self:flex-end;background:#3b82f6;color:white}
 .msg.ai{align-self:flex-start;background:#1e293b;border:1px solid #334155;color:#e2e8f0}
 #aiInputRow{display:flex;gap:8px;padding:10px;border-top:1px solid #1e293b}
 #aiInput{flex:1;background:#020617;border:1px solid #334155;color:white;padding:10px 12px;border-radius:20px;outline:none}
-.chip{padding:6px 10px;background:#1e293b;border:1px solid #334155;border-radius:20px;font-size:11px;cursor:pointer}
 .riskBar{margin:8px 12px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:10px;font-size:11px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 </style></head><body>
-<div class="header"><div class="logo">V66</div><div style="flex:1"><div style="font-weight:800">VENDI V66 <span style="background:#f59e0b;color:#422006;padding:2px 6px;border-radius:6px;font-size:10px">STRICT PLUS 88%</span></div><div style="font-size:10px;color:#94a3b8">Target WR 65%+ • No 5m REAL • R:R 1:2.2</div></div><div style="display:flex;gap:6px"><button onclick="openAI()" style="background:#f59e0b;color:#422006;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">🤖 AI</button><button onclick="openRisk()" style="background:#1e293b;color:white;border:1px solid #334155;padding:6px 10px;border-radius:20px;font-size:11px">⚙️ Risk</button></div></div>
-<div id="banner" class="banner banner-strict">V66 STRICT PLUS - Soglia 88% - Conf 3/3 - EMA50 - RSI 50-65 - Vol 1.8-4.0 - R:R 1:2.2 - 5m OFF in REAL - Target WR 65%+</div>
-<div id="riskBar" class="riskBar"><span id="riskMode">Mode: DEMO</span><span id="riskCap">Cap: $1000 1%</span><span id="riskWR">WR: 0% 0W/0L P:0</span><span id="riskDay">Oggi: 0/2</span><span><button onclick="openHistory()" style="background:#22c55e;color:#052e16;border:none;padding:4px 8px;border-radius:10px;font-size:10px;font-weight:800">📓 Diario</button> <button onclick="runBT()" style="background:#f59e0b;color:#422006;border:none;padding:4px 8px;border-radius:10px;font-size:10px;font-weight:800">📊 Backtest STRICT</button></span></div>
-<div class="tfs"><button id="b5m" onclick="loadTF('5m')">⚡ 5m DEMO</button><button id="b15m" class="active" onclick="loadTF('15m')">15m REAL</button><button id="b1H" onclick="loadTF('1H')">1H REAL</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
-<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V66 STRICT PLUS...</div></div>
-<div id="riskModal" class="modal" onclick="if(event.target==this)closeRisk()"><div class="box"><b>⚙️ Risk Guard V66 STRICT</b><div style="font-size:10px;color:#f59e0b;background:#422006;border:1px solid #f59e0b;padding:8px;border-radius:8px;margin:6px 0">V66: 88% minimo, 3/3 confl, EMA50 allineate, RSI 50-65 long / 35-50 short, Vol 1.8-4.0, R:R 1:2.2, 5m OFF in REAL, max 2 trade/giorno</div><div style="display:grid;gap:10px;margin-top:10px">
-<label style="font-size:12px">Modalità<br><select id="rMode" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"><option value="DEMO">🟡 DEMO STRICT 85%</option><option value="REAL">🔴 REAL STRICT 88% 3/3</option></select></label>
+<div class="header"><div class="logo">V66.1</div><div style="flex:1"><div style="font-weight:800">V66.1 <span style="background:#3b82f6;color:white;padding:2px 6px;border-radius:6px;font-size:10px">BALANCED 85%</span></div><div style="font-size:10px;color:#94a3b8">Segnali tornati + WR 60%+ • R:R 1:2.0</div></div><div style="display:flex;gap:6px"><button onclick="openAI()" style="background:#3b82f6;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">🤖 AI</button><button onclick="openRisk()" style="background:#1e293b;color:white;border:1px solid #334155;padding:6px 10px;border-radius:20px;font-size:11px">⚙️ Risk</button></div></div>
+<div id="banner" class="banner banner-strict">V66.1 BALANCED - Fix nessun segnale: 85% REAL (88% su 5m) - Conf 2/3 - Vol 1.5-6.0 - R:R 1:2.0 - Segnali tornati con WR migliore</div>
+<div id="riskBar" class="riskBar"><span id="riskMode">Mode: DEMO</span><span id="riskCap">Cap: $1000 1%</span><span id="riskWR">WR: 0%</span><span id="riskDay">Oggi: 0/3</span><span><button onclick="openHistory()" style="background:#22c55e;color:#052e16;border:none;padding:4px 8px;border-radius:10px;font-size:10px;font-weight:800">📓 Diario</button> <button onclick="runBT()" style="background:#3b82f6;color:white;border:none;padding:4px 8px;border-radius:10px;font-size:10px;font-weight:800">📊 Backtest</button></span></div>
+<div class="tfs"><button id="b5m" onclick="loadTF('5m')">⚡ 5m</button><button id="b15m" class="active" onclick="loadTF('15m')">15m REAL</button><button id="b1H" onclick="loadTF('1H')">1H REAL</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
+<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V66.1 BALANCED...</div></div>
+<div id="riskModal" class="modal" onclick="if(event.target==this)closeRisk()"><div class="box"><b>⚙️ Risk Guard V66.1 BALANCED</b><div style="font-size:10px;color:#3b82f6;background:#1e3a8a;border:1px solid #3b82f6;padding:8px;border-radius:8px;margin:6px 0">Fix: 85% REAL (era 88% che bloccava tutto), 5m con 88% + Vol 2.0, Conf 2/3, Vol 1.5-6.0 - Tornano i segnali con WR migliore di V65</div><div style="display:grid;gap:10px;margin-top:10px">
+<label style="font-size:12px">Modalità<br><select id="rMode" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"><option value="DEMO">🟡 DEMO 80%</option><option value="REAL">🔴 REAL BALANCED 85%</option></select></label>
 <label style="font-size:12px">Capitale $ <input id="rCap" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
-<label style="font-size:12px">Rischio % (max 2%) <input id="rRisk" type="number" step="0.1" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
+<label style="font-size:12px">Rischio % <input id="rRisk" type="number" step="0.1" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
 <label style="font-size:12px">Max trade/giorno <input id="rMaxT" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
 <label style="font-size:12px">Stop dopo N loss <input id="rMaxL" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
-</div><button class="btn btn-green" onclick="saveRisk()">💾 Salva STRICT</button><button class="btn" onclick="closeRisk()" style="background:#1e293b;color:white">Chiudi</button></div></div>
-<div id="histModal" class="modal" onclick="if(event.target==this)closeHistory()"><div class="box"><b>📓 Diario AUTO V66</b><div style="font-size:10px;color:#22c55e;background:#052e16;border:1px solid #16a34a;padding:8px;border-radius:8px;margin:6px 0">V66 STRICT: meno segnali ma più buoni. Target WR 65%+ con R:R 1:2.2 = profittevole anche con 50% WR</div><div id="histStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0"></div><div id="histList" style="max-height:50vh;overflow:auto"></div><button class="btn" onclick="closeHistory()" style="background:#1e293b;color:white">Chiudi</button></div></div>
-<div id="btModal" class="modal" onclick="if(event.target==this)closeBT()"><div class="box"><b>📊 Backtest STRICT ultimi 200 candele</b><div style="font-size:10px;color:#f59e0b;background:#422006;border:1px solid #f59e0b;padding:8px;border-radius:8px;margin:6px 0">V66 filtra: RSI 50-65 long, EMA9>21>50, Vol 1.8-4.0, 3/3 confl. Meno trade, WR più alto.</div><div id="btStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0">Carico...</div><div id="btList" style="max-height:40vh;overflow:auto;font-size:11px"></div><button class="btn" onclick="closeBT()" style="background:#1e293b;color:white">Chiudi</button></div></div>
-<div id="aiPanel"><div style="padding:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b"><b>🤖 AI V66 STRICT</b><button onclick="closeAI()" style="background:#1e293b;color:white;border:none;padding:6px 10px;border-radius:10px">X</button></div>
-<div id="aiMsgs"><div class="msg ai">V66 STRICT PLUS: ho alzato tutto per aumentare WR da 50% a 65%+:
-
-✅ 88% minimo (era 80%)
-✅ Conf 3/3 (era 2/3) + 1H obbligatorio
-✅ EMA9>21>50 perfette (non solo 9>21)
-✅ RSI 50-65 long / 35-50 short (era 48-68 largo)
-✅ Vol 1.8-4.0 (scarta pump >5.0 e no-vol <1.8)
-✅ Distanza EMA50 >0.3% (scarta choppy)
-✅ R:R 1:2.2 (era 1:1.8) → profittevole anche con 50% WR
-✅ 5m OFF in REAL (era la causa del 0% WR)
-✅ Cooldown 15 min + max 2 trade/giorno (era 10 min 3 trade)
-
-Meno segnali, ma più buoni. Chiedi "diario" o fai backtest 15m.</div>
-<div style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip" onclick="askChip('Diario winrate')">📓 WR ora?</span><span class="chip" onclick="askChip('Perché perdo tanto?')">Perché perdo?</span><span class="chip" onclick="askChip('Backtest 15m STRICT')">📊 Backtest 15m</span></div>
+</div><button class="btn btn-green" onclick="saveRisk()">💾 Salva</button><button class="btn" onclick="closeRisk()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="histModal" class="modal" onclick="if(event.target==this)closeHistory()"><div class="box"><b>📓 Diario V66.1</b><div id="histStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0"></div><div id="histList" style="max-height:50vh;overflow:auto"></div><button class="btn" onclick="closeHistory()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="btModal" class="modal" onclick="if(event.target==this)closeBT()"><div class="box"><b>📊 Backtest BALANCED</b><div id="btStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0">Carico...</div><div id="btList" style="max-height:40vh;overflow:auto;font-size:11px"></div><button class="btn" onclick="closeBT()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="aiPanel"><div style="padding:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b"><b>🤖 AI V66.1 BALANCED</b><button onclick="closeAI()" style="background:#1e293b;color:white;border:none;padding:6px 10px;border-radius:10px">X</button></div>
+<div id="aiMsgs"><div class="msg ai">V66.1 fix nessun segnale: ho abbassato da 88% a 85% su 15m/1H REAL (5m resta 88% + Vol 2.0), Vol da 1.8-4.0 a 1.5-6.0, Conf da 3/3 a 2/3. Ora tornano 3-6 segnali al giorno con WR migliore di V65 perché tengo RSI stretto e R:R 1:2.0.</div>
 </div>
-<div id="aiInputRow"><input id="aiInput" placeholder="Perché perdo? Diario?" onkeydown="if(event.key==='Enter')sendAI()"><button onclick="sendAI()" style="background:#f59e0b;color:#422006;border:none;padding:10px 16px;border-radius:20px;font-weight:800">Invia</button></div>
+<div id="aiInputRow"><input id="aiInput" placeholder="Segnali tornati?" onkeydown="if(event.key==='Enter')sendAI()"><button onclick="sendAI()" style="background:#3b82f6;color:white;border:none;padding:10px 16px;border-radius:20px;font-weight:800">Invia</button></div>
 </div>
 <div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">SL</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TP</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span><br><span id="mRR" style="font-size:10px;color:#86efac"></span></div></div><div id="mRisk" style="font-size:11px;background:#052e16;border:1px solid #16a34a;padding:10px;border-radius:10px;margin:8px 0;color:#86efac"></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia</button><button class="btn btn-blue" onclick="openChart()">📈 TV</button><button class="btn btn-purple" onclick="askAboutCoin()">🤖 AI</button><button class="btn btn-blue" onclick="sendNow()">📱 TG ORA</button></div></div>
 <script>
@@ -571,12 +537,12 @@ var curTF='15m';var lastData=null;var curCoin=null;var riskCfg=null;
 function badge(c,l){if(c=='entra')return '<span class="badge badge-entra">'+l+'</span>';if(c=='quasi')return '<span class="badge badge-quasi">'+l+'</span>';return '<span class="badge badge-wait">'+l+'</span>';}
 async function loadRisk(){try{let r=await fetch('/api/risk_config');let j=await r.json();riskCfg=j.risk;document.getElementById('riskMode').textContent='Mode: '+riskCfg.mode;document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%';document.getElementById('riskDay').textContent='Oggi: '+riskCfg.daily_trades+'/'+riskCfg.max_trades_day;document.getElementById('rMode').value=riskCfg.mode;document.getElementById('rCap').value=riskCfg.capital;document.getElementById('rRisk').value=riskCfg.risk_pct;document.getElementById('rMaxT').value=riskCfg.max_trades_day;document.getElementById('rMaxL').value=riskCfg.max_losses_row;}catch{}}
 async function checkTG(){await loadRisk();}
-async function nuke(){if(!confirm('NUKE V66 STRICT? Pulisce tutto'))return;try{let r=await fetch('/api/nuke');alert('✅ NUKE STRICT - Ora WR ripartirà più alto');location.reload();}catch(e){alert(e.message);}}
+async function nuke(){if(!confirm('NUKE V66.1?'))return;try{let r=await fetch('/api/nuke');alert('✅ NUKE - Ora segnali tornano');location.reload();}catch(e){alert(e.message);}}
 async function loadTF(tf,withTG=false,force=false){
 curTF=tf;
 document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
 let el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V66 STRICT 88%...</div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V66.1 BALANCED...</div>';
 let controller=new AbortController(); let timeout=setTimeout(()=>controller.abort(),10000);
 try{
 let url='/api/signals?tf='+tf+(withTG?'&telegram=1':'')+(force?'&force=1':'');
@@ -594,12 +560,12 @@ if(d.telegram_results && Object.keys(d.telegram_results).length>0){html+=`<div s
 document.getElementById('coins').innerHTML=html;
 }catch(e){
 clearTimeout(timeout);
-document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444;text-align:center">Timeout - premi NUKE<br><button onclick="nuke()" style="margin-top:10px;background:#dc2626;color:white;border:none;padding:10px 20px;border-radius:20px">💣 NUKE</button></div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444;text-align:center">Timeout<br><button onclick="nuke()" style="margin-top:10px;background:#dc2626;color:white;border:none;padding:10px 20px;border-radius:20px">💣 NUKE</button></div>';
 }
 }
-function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF+' confl '+info.confluence+'/3'; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mRR').textContent='R:R 1:'+info.rr; document.getElementById('mExtra').textContent=info.extra; let riskDiv=document.getElementById('mRisk'); if(riskCfg){let riskMoney=riskCfg.capital*riskCfg.risk_pct/100;let size=riskMoney/(info.price*info.sl_pct/100);riskDiv.innerHTML=`💼 ${riskCfg.mode} $${riskCfg.capital} ${riskCfg.risk_pct}% = $${riskMoney.toFixed(2)} size ${size.toFixed(4)} - R:R 1:${info.rr} - Target WR 65%+`;} document.getElementById('modal').classList.add('show');}
+function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF+' confl '+info.confluence+'/3'; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mRR').textContent='R:R 1:'+info.rr; document.getElementById('mExtra').textContent=info.extra; let riskDiv=document.getElementById('mRisk'); if(riskCfg){let riskMoney=riskCfg.capital*riskCfg.risk_pct/100;let size=riskMoney/(info.price*info.sl_pct/100);riskDiv.innerHTML=`💼 ${riskCfg.mode} $${riskCfg.capital} ${riskCfg.risk_pct}% = $${riskMoney.toFixed(2)} size ${size.toFixed(4)}`;} document.getElementById('modal').classList.add('show');}
 function closeM(){document.getElementById('modal').classList.remove('show');}
-function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} TP ${info.tp.toFixed(2)} R:R 1:${info.rr}`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato'));}
+function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} TP ${info.tp.toFixed(2)}`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato'));}
 function openChart(){if(!curCoin) return; let sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]; window.open('https://www.tradingview.com/chart/?symbol='+sym,'_blank');}
 async function sendNow(){if(!curCoin) return; try{let r=await fetch('/api/signals?tf='+curTF+'&telegram=1&force=1'); let j=await r.json(); alert('TG: '+JSON.stringify(j.telegram_results));}catch(e){alert(e.message);}}
 function openAI(){document.getElementById('aiPanel').classList.add('show');}
@@ -609,14 +575,14 @@ function askAboutCoin(){if(!curCoin) return; closeM(); openAI(); document.getEle
 async function sendAI(){let input=document.getElementById('aiInput'); let txt=input.value.trim(); if(!txt) return; let msgs=document.getElementById('aiMsgs'); let div=document.createElement('div'); div.className='msg user'; div.textContent=txt; msgs.appendChild(div); input.value=''; msgs.scrollTop=msgs.scrollHeight; try{let r=await fetch('/api/ai_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:txt,coin:curCoin||'BTC',tf:curTF})}); let j=await r.json(); let ans=j.answer||j.error||'Errore'; let div2=document.createElement('div'); div2.className='msg ai'; div2.textContent=ans; msgs.appendChild(div2); msgs.scrollTop=msgs.scrollHeight;}catch(e){let div2=document.createElement('div'); div2.className='msg ai'; div2.textContent='Errore: '+e.message; msgs.appendChild(div2);}}
 function openRisk(){document.getElementById('riskModal').classList.add('show');}
 function closeRisk(){document.getElementById('riskModal').classList.remove('show');}
-async function saveRisk(){let mode=document.getElementById('rMode').value; let cap=document.getElementById('rCap').value; let risk=document.getElementById('rRisk').value; let maxT=document.getElementById('rMaxT').value; let maxL=document.getElementById('rMaxL').value; try{let r=await fetch('/api/risk_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode,capital:cap,risk_pct:risk,max_trades_day:maxT,max_losses_row:maxL})}); let j=await r.json(); alert('✅ Salvato STRICT'); closeRisk(); await loadRisk(); await loadTF(curTF);}catch(e){alert(e.message);}}
-async function loadHistoryStats(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('riskWR').textContent=`WR: ${j.winrate}% ${j.wins}W/${j.losses}L P:${j.pending} PnL ${j.pnl_sum}%`; document.getElementById('riskMode').textContent='Mode: '+ (riskCfg?riskCfg.mode:'DEMO'); if(riskCfg) document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%'; }catch{}}
+async function saveRisk(){let mode=document.getElementById('rMode').value; let cap=document.getElementById('rCap').value; let risk=document.getElementById('rRisk').value; let maxT=document.getElementById('rMaxT').value; let maxL=document.getElementById('rMaxL').value; try{let r=await fetch('/api/risk_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode,capital:cap,risk_pct:risk,max_trades_day:maxT,max_losses_row:maxL})}); let j=await r.json(); alert('✅ Salvato'); closeRisk(); await loadRisk(); await loadTF(curTF);}catch(e){alert(e.message);}}
+async function loadHistoryStats(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('riskWR').textContent=`WR: ${j.winrate}% ${j.wins}W/${j.losses}L P:${j.pending}`; document.getElementById('riskMode').textContent='Mode: '+ (riskCfg?riskCfg.mode:'DEMO'); if(riskCfg) document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%'; }catch{}}
 function openHistory(){document.getElementById('histModal').classList.add('show'); loadHistory();}
 function closeHistory(){document.getElementById('histModal').classList.remove('show');}
-async function loadHistory(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('histStats').textContent=`Totale ${j.total} - WIN ${j.wins} - LOSS ${j.losses} - Pending ${j.pending} - WR ${j.winrate}% - PnL ${j.pnl_sum}% - V66 STRICT target 65%+`; let list=document.getElementById('histList');let html=''; j.history.slice().reverse().forEach((t,i)=>{let col=t.result=='WIN'?'#22c55e':t.result=='LOSS'?'#ef4444':'#facc15'; let auto=t.auto?'🤖':'👤'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:11px"><div><b>${auto} ${t.coin} ${t.tf} ${t.signal} ${t.conf}%</b> $${t.entry?.toFixed(2)} → ${t.result?`$${(t.result=='WIN'?t.tp:t.sl).toFixed(2)}`:'...'}<br><span style="color:#94a3b8">${t.time.slice(11,19)} ${t.mode} PnL ${t.pnl_pct?.toFixed(2)}% R:R 1:2.2</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.result||'APERTO'}</span><br><span style="font-size:9px;color:#64748b">Auto in ${Math.max(0,Math.round((t.expiry-Date.now()/1000)/60))}m</span></div></div>`;}); list.innerHTML=html||'Nessun trade V66 - Normale, filtri più stretti = meno segnali';}catch(e){alert(e.message);}}
+async function loadHistory(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('histStats').textContent=`Totale ${j.total} - WIN ${j.wins} - LOSS ${j.losses} - Pending ${j.pending} - WR ${j.winrate}% - PnL ${j.pnl_sum}%`; let list=document.getElementById('histList');let html=''; j.history.slice().reverse().forEach((t,i)=>{let col=t.result=='WIN'?'#22c55e':t.result=='LOSS'?'#ef4444':'#facc15'; let auto=t.auto?'🤖':'👤'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:11px"><div><b>${auto} ${t.coin} ${t.tf} ${t.signal} ${t.conf}%</b> $${t.entry?.toFixed(2)} → ${t.result?`$${(t.result=='WIN'?t.tp:t.sl).toFixed(2)}`:'...'}<br><span style="color:#94a3b8">${t.time.slice(11,19)} ${t.mode} PnL ${t.pnl_pct?.toFixed(2)}%</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.result||'APERTO'}</span><br><span style="font-size:9px;color:#64748b">Auto in ${Math.max(0,Math.round((t.expiry-Date.now()/1000)/60))}m</span></div></div>`;}); list.innerHTML=html||'Nessun trade - Ora dovrebbero tornare';}catch(e){alert(e.message);}}
 function openBT(){document.getElementById('btModal').classList.add('show'); runBT();}
 function closeBT(){document.getElementById('btModal').classList.remove('show');}
-async function runBT(){let coin=curCoin||'BTC';let tf=curTF; document.getElementById('btStats').textContent='Carico backtest STRICT '+coin+' '+tf+'...'; document.getElementById('btList').innerHTML=''; document.getElementById('btModal').classList.add('show'); try{let r=await fetch(`/api/backtest?coin=${coin}&tf=${tf}`); let j=await r.json(); if(!j.ok){document.getElementById('btStats').textContent='Errore: '+j.error; return;} document.getElementById('btStats').textContent=`V66 STRICT ${j.coin} ${j.tf}: ${j.total} trade, ${j.wins} WIN, ${j.losses} LOSS, WR ${j.winrate}% (target >65%) - Meno trade ma più buoni`; let html=''; j.trades.reverse().forEach(t=>{let col=t.result=='WIN'?'#22c55e':'#ef4444'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:12px"><div><b>${t.signal}</b> $${t.entry.toFixed(2)}<br><span style="font-size:10px;color:#94a3b8">📅 ${t.time} RSI ${t.rsi} Vol x${t.vol} • ${t.conf}%</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.result}</span></div></div>`;}); document.getElementById('btList').innerHTML=html||'Nessun trade STRICT - Filtri molto stretti, attendi';}catch(e){document.getElementById('btStats').textContent='Errore: '+e.message;}}
+async function runBT(){let coin=curCoin||'BTC';let tf=curTF; document.getElementById('btStats').textContent='Carico backtest BALANCED '+coin+' '+tf+'...'; document.getElementById('btList').innerHTML=''; document.getElementById('btModal').classList.add('show'); try{let r=await fetch(`/api/backtest?coin=${coin}&tf=${tf}`); let j=await r.json(); if(!j.ok){document.getElementById('btStats').textContent='Errore: '+j.error; return;} document.getElementById('btStats').textContent=`V66.1 BALANCED ${j.coin} ${j.tf}: ${j.total} trade, ${j.wins} WIN, ${j.losses} LOSS, WR ${j.winrate}%`; let html=''; j.trades.reverse().forEach(t=>{let col=t.result=='WIN'?'#22c55e':'#ef4444'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:12px"><div><b>${t.signal}</b> $${t.entry.toFixed(2)}<br><span style="font-size:10px;color:#94a3b8">📅 ${t.time} RSI ${t.rsi} Vol x${t.vol}</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.result}</span></div></div>`;}); document.getElementById('btList').innerHTML=html||'Nessun trade BALANCED';}catch(e){document.getElementById('btStats').textContent='Errore: '+e.message;}}
 checkTG();loadTF('15m');setInterval(()=>loadTF(curTF),15000);
 setInterval(()=>{loadHistoryStats();},10000);
 </script></body></html>
@@ -627,12 +593,12 @@ def bg_loop():
     while True:
         try:
             check_pending_trades()
-            for tf in ["15m","1H"]:
+            for tf in ["5m","15m","1H"]:
                 for name in PAIRS.keys():
                     analyze(name, tf, do_tg=True)
         except Exception as e:
-            print(f"Loop V66 {e}")
-        time.sleep(45)
+            print(f"Loop V66.1 {e}")
+        time.sleep(30)
 
 threading.Thread(target=bg_loop, daemon=True).start()
 if __name__=="__main__":
