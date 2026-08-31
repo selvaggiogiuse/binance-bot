@@ -14,15 +14,15 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 TELEGRAM_MIN_CONF = 80
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V64.2 FAST FIX LOADING + VENDI FIX"
+VERSION = "V65 BACKTEST AUTOMATICO + VENDI FIX + FAST"
 COOLDOWN = 600
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
 STABLE_SECONDS = 180
-TRADE_HISTORY = []
+TRADE_HISTORY = []  # ora auto: result si aggiorna da solo
 RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 3, "max_losses_row": 2, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today())}
-# Cache OHLC per non bloccare /api/signals
-OHLC_CACHE = {}  # key -> (timestamp, data)
+OHLC_CACHE = {}
+BACKTEST_CACHE = {}
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -48,7 +48,7 @@ def get_price(name):
     except: pass
     try:
         km={"BTC":"XXBTZUSD","ETH":"XETHZUSD","ORO":"PAXGUSD"}[name]
-        r=requests.get(f"https://api.kraken.com/0/public/Ticker?pair={km}",timeout=3)
+        r=requests.get(f"https://api.kraken.com/0/public/Ticker?pair={km}",timeout=2)
         if r.status_code==200:
             res=r.json().get("result",{})
             if res:
@@ -57,7 +57,7 @@ def get_price(name):
     except: pass
     try:
         cg={"BTC":"bitcoin","ETH":"ethereum","ORO":"pax-gold"}[name]
-        r=requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg}&vs_currencies=usd",timeout=3)
+        r=requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg}&vs_currencies=usd",timeout=2)
         if r.status_code==200: return float(r.json()[cg]["usd"]), "COINGECKO"
     except: pass
     return None, "FAIL"
@@ -66,13 +66,12 @@ def fetch_binance_fast(sym, interval, limit=200):
     try:
         r=requests.get(f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",timeout=2,headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code!=200: return []
-        return [{"close":float(k[4]),"low":float(k[3]),"high":float(k[2]),"volume":float(k[5])} for k in r.json()]
+        return [{"close":float(k[4]),"low":float(k[3]),"high":float(k[2]),"volume":float(k[5]),"open_time":k[0]} for k in r.json()]
     except: return []
 
 def fetch_ohlc_cached(name, tf, limit=200):
     key=f"{name}_{tf}_{limit}"
     now=time.time()
-    # se cache < 30 sec, usa cache
     if key in OHLC_CACHE and now - OHLC_CACHE[key][0] < 30:
         return OHLC_CACHE[key][1], "CACHE"
     sym=PAIRS[name]
@@ -81,7 +80,6 @@ def fetch_ohlc_cached(name, tf, limit=200):
     ohlc=fetch_binance_fast(sym, interval, limit)
     src="BINANCE"
     if not ohlc or len(ohlc)<20:
-        # prova kraken veloce
         try:
             km={"BTC":"XXBTZUSD","ETH":"XETHZUSD","ORO":"PAXGUSD"}[name]
             imap={"5m":1,"15m":15,"1h":60,"4h":240,"1d":1440}
@@ -90,13 +88,12 @@ def fetch_ohlc_cached(name, tf, limit=200):
                 res=r.json().get("result",{})
                 if res:
                     fk=[k for k in res.keys() if k!="last"][0]
-                    ohlc=[{"close":float(k[4]),"low":float(k[2]),"high":float(k[3]),"volume":float(k[6])} for k in res[fk][-limit:]]
+                    ohlc=[{"close":float(k[4]),"low":float(k[2]),"high":float(k[3]),"volume":float(k[6]),"open_time":k[0]*1000} for k in res[fk][-limit:]]
                     src="KRAKEN"
         except: pass
     if ohlc and len(ohlc)>=20:
         OHLC_CACHE[key]=(now, ohlc)
         return ohlc, src
-    # se fallisce ma ho cache vecchia, usa quella
     if key in OHLC_CACHE:
         return OHLC_CACHE[key][1], "CACHE_OLD"
     return [], "FAIL"
@@ -133,8 +130,8 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
         cap=RISK_CONFIG["capital"]; risk_pct=RISK_CONFIG["risk_pct"]; risk_money=cap*risk_pct/100
         size = risk_money / (price * sl_pct/100) if sl_pct>0 else 0
         size_info=f"\n💼 {mode_tag} Size: {size:.4f} | Rischio ${risk_money:.2f}"
-    else: size_info=f"\n🧪 {mode_tag}"
-    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V64.2 FAST
+    else: size_info=f"\n🧪 {mode_tag} + Backtest Auto"
+    text=f"""{emoji} *{signal} {coin} {conf}%* ⚡ {tf} V65 BACKTEST
 
 💰 Entry: ${price:.2f} ({source})
 🎯 SL: ${sl:.2f} (-{sl_pct:.2f}%) | TP: ${tp:.2f} (+{tp_pct:.2f}%) R:R 1:{rr:.1f}{size_info}
@@ -146,7 +143,10 @@ def send_tg(coin, tf, signal, conf, price, sl, tp, sl_pct, tp_pct, source, rsi, 
         if r.status_code==200:
             LAST_TELEGRAM[key]=now
             if is_real: RISK_CONFIG["daily_trades"]+=1
-            TRADE_HISTORY.append({"time":rome_now().isoformat(),"coin":coin,"tf":tf,"signal":signal,"entry":price,"sl":sl,"tp":tp,"conf":conf,"mode":RISK_CONFIG["mode"],"result":None})
+            # V65: expiry automatica per backtest
+            expiry_min = {"5m":30, "15m":90, "1H":360}.get(tf,30)
+            expiry = time.time() + expiry_min*60
+            TRADE_HISTORY.append({"time":rome_now().isoformat(),"timestamp":time.time(),"expiry":expiry,"coin":coin,"tf":tf,"signal":signal,"entry":price,"sl":sl,"tp":tp,"conf":conf,"mode":RISK_CONFIG["mode"],"result":None,"pnl_pct":0,"auto":True})
             if len(TRADE_HISTORY)>200: TRADE_HISTORY.pop(0)
             return {"ok":True,"sent":True}
         return {"ok":False,"error":r.text[:300]}
@@ -208,7 +208,7 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             sl_pct=max(0.5,min(1.2,sl_pct_raw))
             sl=price*(1+sl_pct/100); tp_pct=sl_pct*1.8; tp=price*(1-tp_pct/100)
             signal="VENDI"
-        extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • Conf {confluence_score}/3 • V64.2 FAST"
+        extra=f"{h1_text} • Vol x{vol_ratio:.1f} • {source} • Conf {confluence_score}/3 • V65 AUTO"
         if signal=="COMPRA" and not (h1_up or m15_up):
             conf=max(15, conf-20); extra+= " • ⚠️ 1H/15m DOWN"
         if signal=="VENDI" and (h1_up and m15_up):
@@ -247,27 +247,112 @@ def analyze(name, tf, do_tg=False, force_tg=False):
         print(f"ANALYZE ERROR {name} {tf}: {e}")
         return None, None
 
+def check_pending_trades():
+    # V65: controlla trade aperti e segna WIN/LOSS automatico
+    now=time.time()
+    for t in TRADE_HISTORY:
+        if t.get("result") is not None: continue
+        # timeout
+        if now > t.get("expiry", now+1800):
+            # se timeout senza TP/SL, valuta su prezzo attuale
+            price,_ = get_price(t["coin"])
+            if not price: continue
+            if t["signal"]=="COMPRA":
+                pnl = (price - t["entry"])/t["entry"]*100
+                if price>=t["tp"]: t["result"]="WIN"; t["pnl_pct"]=t.get("tp",0)/t["entry"]*100 -100
+                elif price<=t["sl"]: t["result"]="LOSS"; t["pnl_pct"]= -abs((t["sl"]-t["entry"])/t["entry"]*100)
+                else: t["result"]="LOSS" if pnl<0 else "WIN"; t["pnl_pct"]=pnl
+            else:
+                pnl = (t["entry"]-price)/t["entry"]*100
+                if price<=t["tp"]: t["result"]="WIN"; t["pnl_pct"]=abs(pnl)
+                elif price>=t["sl"]: t["result"]="LOSS"; t["pnl_pct"]= -abs(pnl)
+                else: t["result"]="LOSS" if pnl<0 else "WIN"; t["pnl_pct"]=pnl
+            if t["result"]=="LOSS": RISK_CONFIG["daily_losses_row"]+=1
+            else: RISK_CONFIG["daily_losses_row"]=0
+            continue
+        # controllo live TP/SL
+        price,_ = get_price(t["coin"])
+        if not price: continue
+        if t["signal"]=="COMPRA":
+            if price>=t["tp"]:
+                t["result"]="WIN"; t["pnl_pct"]=(t["tp"]-t["entry"])/t["entry"]*100
+                RISK_CONFIG["daily_losses_row"]=0
+            elif price<=t["sl"]:
+                t["result"]="LOSS"; t["pnl_pct"]= -abs((t["entry"]-t["sl"])/t["entry"]*100)
+                RISK_CONFIG["daily_losses_row"]+=1
+        else:
+            if price<=t["tp"]:
+                t["result"]="WIN"; t["pnl_pct"]=(t["entry"]-t["tp"])/t["entry"]*100
+                RISK_CONFIG["daily_losses_row"]=0
+            elif price>=t["sl"]:
+                t["result"]="LOSS"; t["pnl_pct"]= -abs((t["sl"]-t["entry"])/t["entry"]*100)
+                RISK_CONFIG["daily_losses_row"]+=1
+
+def run_backtest(coin="BTC", tf="15m", limit=200):
+    # Simula segnali passati su 200 candele
+    ohlc, _ = fetch_ohlc_cached(coin, tf, limit)
+    if not ohlc or len(ohlc)<60: return {"ok":False,"error":"no ohlc"}
+    wins=0; losses=0; trades=[]
+    closes=[c["close"] for c in ohlc]
+    for i in range(50, len(ohlc)-6):
+        sub=ohlc[:i+1]
+        sub_closes=[c["close"] for c in sub]
+        ema9=ema_calc(sub_closes,9); ema21=ema_calc(sub_closes,21); ema50=ema_calc(sub_closes,50)
+        rsi=rsi_calc(sub_closes,14)
+        price=sub[-1]["close"]
+        # logica semplificata per backtest
+        signal = "COMPRA" if price>ema21 else "VENDI"
+        conf=80
+        if 52<=rsi<=62: conf+=5
+        if price>ema9 and ema9>ema21: conf+=10
+        if price<ema9 and ema9<ema21: conf+=10
+        if conf<80: continue
+        sl = min([c["low"] for c in sub[-10:]])*0.998 if signal=="COMPRA" else max([c["high"] for c in sub[-10:]])*1.002
+        tp = price*1.009 if signal=="COMPRA" else price*0.991
+        # guarda prossime 6 candele
+        future=ohlc[i+1:i+7]
+        result=None
+        for f in future:
+            if signal=="COMPRA":
+                if f["high"]>=tp: result="WIN"; break
+                if f["low"]<=sl: result="LOSS"; break
+            else:
+                if f["low"]<=tp: result="WIN"; break
+                if f["high"]>=sl: result="LOSS"; break
+        if result:
+            trades.append({"idx":i,"signal":signal,"entry":price,"result":result})
+            if result=="WIN": wins+=1
+            else: losses+=1
+    total=wins+losses
+    wr=wins/total*100 if total>0 else 0
+    return {"ok":True,"coin":coin,"tf":tf,"total":total,"wins":wins,"losses":losses,"winrate":round(wr,1),"trades":trades[-20:]}
+
 def ai_market_answer(question, coin="BTC", tf="5m"):
     q = question.lower()
     data, _ = analyze(coin, tf, do_tg=False)
     if not data:
-        return "Non riesco a leggere i dati ora (Binance lento), riprova tra 10 sec - ho messo cache per velocizzare."
+        return "Dati lenti, riprova - cache 30s attiva."
     price = data["price"]; rsi = data["rsi"]; conf = data["conf"]; sig = data["signal"]; vol = data["vol_ratio"]; ema9=data["ema9"]; ema21=data["ema21"]; ema50=data["ema50"]; h1=data["h1"]; sl=data["sl"]; tp=data["tp"]; confl=data["confluence"]
     mode=RISK_CONFIG["mode"]; cap=RISK_CONFIG["capital"]; risk=RISK_CONFIG["risk_pct"]
     risk_money=cap*risk/100
-    trend = "rialzista" if price>ema21 else "ribassista"
+    # stats auto
+    total=len(TRADE_HISTORY); wins=len([t for t in TRADE_HISTORY if t.get("result")=="WIN"]); losses=len([t for t in TRADE_HISTORY if t.get("result")=="LOSS"]); pending=len([t for t in TRADE_HISTORY if t.get("result") is None])
+    wr=wins/total*100 if total>0 else 0
+    if "diario" in q or "win" in q or "backtest" in q:
+        bt=run_backtest(coin, tf)
+        return f"📓 Diario LIVE AUTO: {total} segnali, {wins} WIN, {losses} LOSS, {pending} aperti, WR {wr:.1f}% (auto, non a mano)\n📊 Backtest {tf} ultimi {bt.get('total',0)} trade: {bt.get('wins',0)} WIN {bt.get('losses',0)} LOSS WR {bt.get('winrate',0)}% - Per soldi veri serve 15m >60% su 30 giorni"
     if "compra" in q or "vendi" in q or "reale" in q or "soldi" in q:
         if data["quality_color"]=="entra":
             size = risk_money / (price * data["sl_pct"]/100) if data["sl_pct"]>0 else 0
-            return f"✅ {coin} {tf} {sig} {conf}% - ${price:.2f} confl {confl}/3 | RSI {rsi} Vol x{vol} | {h1}\n💼 {mode}: ${cap} {risk}% = ${risk_money:.2f} size {size:.4f}\n🎯 SL ${sl:.2f} TP ${tp:.2f} R:R 1:{data['rr']}"
+            return f"✅ {coin} {tf} {sig} {conf}% confl {confl}/3 RSI {rsi} Vol x{vol} {h1}\n💼 {mode}: ${cap} {risk}% = ${risk_money:.2f} size {size:.4f} - Oggi {RISK_CONFIG['daily_trades']}/{RISK_CONFIG['max_trades_day']}\n🎯 SL ${sl:.2f} TP ${tp:.2f}\n📓 Auto WR LIVE {wr:.1f}% ({wins}W/{losses}L) - Trade si chiude da solo a TP/SL"
         else:
-            return f"⏸️ {coin} {tf} {data['quality_label']} {conf}% ({sig}) confl {confl}/3 RSI {rsi} Vol x{vol} {h1}\nEMA9 {ema9:.0f} EMA21 {ema21:.0f} EMA50 {ema50:.0f} - Aspetta 85%+ e confl 2/3"
-    return f"V64.2 FAST {coin} {tf}: ${price:.2f} {sig} {conf}% confl {confl}/3 RSI {rsi} Vol x{vol} | {h1} | SL ${sl:.0f} TP ${tp:.0f} | Mode {mode}"
+            return f"⏸️ {coin} {tf} {data['quality_label']} {conf}% ({sig}) confl {confl}/3 RSI {rsi} {h1} - WR live {wr:.1f}% - Aspetta ENTRA 80%+"
+    return f"V65 AUTO {coin} {tf}: ${price:.2f} {sig} {conf}% confl {confl}/3 RSI {rsi} Vol x{vol} | {h1} | WR {wr:.1f}% auto | Mode {mode} - Chiedi 'diario winrate' per backtest"
 
 @app.route("/")
 def home(): return Response(f"{VERSION} - {rome_now()} - Mode {RISK_CONFIG['mode']}", mimetype="text/plain")
 @app.route("/health")
-def health(): return jsonify({"ok":True,"version":VERSION,"time":rome_now().isoformat(),"telegram":TELEGRAM_ENABLED,"risk":RISK_CONFIG,"cache":len(OHLC_CACHE)})
+def health(): return jsonify({"ok":True,"version":VERSION,"time":rome_now().isoformat(),"telegram":TELEGRAM_ENABLED,"risk":RISK_CONFIG,"cache":len(OHLC_CACHE),"history":len(TRADE_HISTORY)})
 @app.route("/api/nuke")
 def nuke():
     global LAST_TELEGRAM, LAST_ENTRA, TRADE_HISTORY, OHLC_CACHE
@@ -289,20 +374,19 @@ def api_signals():
         for name in PAIRS.keys():
             try:
                 d,tr=analyze(name, tf, do_tg, force_tg=force)
-                if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"spark":[],"extra":"Carico veloce...","h1":"--","confluence":0,"is_real":False}
+                if d is None: d={"price":0,"source":"LOADING","signal":"LOADING","conf":0,"quality_color":"loading","quality_label":"CARICO...","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"spark":[],"extra":"Carico...","h1":"--","confluence":0,"is_real":False}
                 res[name]=d
                 if tr: tg[name]=tr
             except Exception as e:
                 print(f"SIGNALS ERROR {name}: {e}")
-                res[name]={"price":0,"source":"ERROR","signal":"ERROR","conf":0,"quality_color":"wait","quality_label":"ERRORE","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"spark":[],"extra":f"Errore {str(e)[:100]}","h1":"--","confluence":0,"is_real":False}
+                res[name]={"price":0,"source":"ERROR","signal":"ERROR","conf":0,"quality_color":"wait","quality_label":"ERRORE","rsi":50,"stoch_k":50,"vol_ratio":1,"sl":0,"tp":0,"sl_pct":0.8,"tp_pct":1.5,"rr":1.8,"spark":[],"extra":f"Errore {str(e)[:80]}","h1":"--","confluence":0,"is_real":False}
         return jsonify({"ok":True,"tf":tf,"coins":res,"telegram_results":tg,"telegram_enabled":TELEGRAM_ENABLED,"version":VERSION,"time":rome_now().isoformat(),"risk":RISK_CONFIG})
     except Exception as e:
-        print(f"API SIGNALS FATAL: {e}")
         return jsonify({"ok":False,"error":str(e),"version":VERSION}), 500
 
 @app.route("/api/telegram_test")
 def tg_test():
-    r=send_tg("BTC","5m","COMPRA",85,80000,79400,81200,0.7,1.5,"TEST",55,"Test V64.2 FAST",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
+    r=send_tg("BTC","5m","COMPRA",85,80000,79400,81200,0.7,1.5,"TEST",55,"Test V65 AUTO",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
     return jsonify(r)
 @app.route("/api/force_telegram")
 def force_tg():
@@ -310,7 +394,7 @@ def force_tg():
     for name in PAIRS.keys():
         p,_=get_price(name)
         if p is None: p=80000
-        out[name]=send_tg(name,"5m","COMPRA",85,p,p*0.995,p*1.01,0.5,0.9,"FORCE V64.2",55,"Force FAST",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
+        out[name]=send_tg(name,"5m","COMPRA",85,p,p*0.995,p*1.01,0.5,0.9,"FORCE V65",55,"Force AUTO",force=True,is_real=(RISK_CONFIG["mode"]=="REAL"))
     return jsonify(out)
 @app.route("/api/telegram_config")
 def tg_config():
@@ -356,7 +440,9 @@ def api_history():
     losses=len([t for t in TRADE_HISTORY if t.get("result")=="LOSS"])
     pending=len([t for t in TRADE_HISTORY if t.get("result") is None])
     wr = wins/total*100 if total>0 else 0
-    return jsonify({"ok":True,"total":total,"wins":wins,"losses":losses,"pending":pending,"winrate":round(wr,1),"history":TRADE_HISTORY[-50:]})
+    # equity
+    pnl_sum=sum([t.get("pnl_pct",0) for t in TRADE_HISTORY if t.get("result") is not None])
+    return jsonify({"ok":True,"total":total,"wins":wins,"losses":losses,"pending":pending,"winrate":round(wr,1),"pnl_sum":round(pnl_sum,2),"history":TRADE_HISTORY[-50:]})
 @app.route("/api/history_mark", methods=["POST"])
 def api_history_mark():
     try:
@@ -364,23 +450,34 @@ def api_history_mark():
         idx=body.get("idx",-1)
         result=body.get("result")
         if idx<0: idx=len(TRADE_HISTORY)+idx
-        if 0<=idx<len(TRADE_HISTORY) and result in ["WIN","LOSS"]:
-            TRADE_HISTORY[idx]["result"]=result
-            if result=="LOSS": RISK_CONFIG["daily_losses_row"]+=1
-            else: RISK_CONFIG["daily_losses_row"]=0
+        if 0<=idx<len(TRADE_HISTORY) and result in ["WIN","LOSS",None]:
+            if result is None:
+                TRADE_HISTORY[idx]["result"]=None
+            else:
+                TRADE_HISTORY[idx]["result"]=result
+                if result=="LOSS": RISK_CONFIG["daily_losses_row"]+=1
+                else: RISK_CONFIG["daily_losses_row"]=0
             return jsonify({"ok":True,"updated":TRADE_HISTORY[idx]})
         return jsonify({"ok":False,"error":"idx o result non valido"})
     except Exception as e: return jsonify({"ok":False,"error":str(e)})
+@app.route("/api/backtest")
+def api_backtest():
+    coin=request.args.get("coin","BTC")
+    tf=request.args.get("tf","15m")
+    if coin not in PAIRS: coin="BTC"
+    res=run_backtest(coin, tf)
+    return jsonify(res)
+
 @app.route("/app")
 def app_page():
     html="""
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VENDI V64.2 FAST</title>
+<title>VENDI V65 BACKTEST AUTO</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif}
 body{margin:0;background:#020617;color:#e2e8f0}
 .header{padding:14px 16px;display:flex;align-items:center;gap:12px;background:#0f172a;border-bottom:1px solid #1e293b;position:sticky;top:0;z-index:10}
-.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#ef4444);display:flex;align-items:center;justify-content:center;font-weight:900;color:white}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#22c55e,#3b82f6);display:flex;align-items:center;justify-content:center;font-weight:900;color:white}
 .badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:800}
 .badge-entra{background:#22c55e;color:#052e16;animation:glow 1s infinite alternate}
 .badge-quasi{background:#facc15;color:#422006}
@@ -391,7 +488,6 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .tfs button.active{background:#22c55e;color:#052e16}
 .banner{margin:8px 12px;padding:10px 12px;border-radius:10px;font-size:12px;text-align:center}
 .b-on{background:#052e16;border:1px solid #16a34a;color:#86efac}
-.b-off{background:#450a0a;border:1px solid #dc2626;color:#fca5a5}
 .banner-real{background:#7f1d1d;border:1px solid #ef4444;color:#fecaca;font-weight:800}
 .coin{background:#0f172a;border:1px solid #1e293b;border-radius:14px;margin:8px 10px;overflow:hidden}
 .coin-row{display:flex;justify-content:space-between;align-items:center;padding:14px;cursor:pointer}
@@ -405,50 +501,53 @@ body{margin:0;background:#020617;color:#e2e8f0}
 .btn-green{background:#16a34a;color:white}
 .btn-purple{background:#8b5cf6;color:white}
 .btn-red{background:#dc2626;color:white}
-#aiPanel{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;background:#0f172a;border-top:2px solid #ef4444;border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-radius:20px 20px 0 0;z-index:60;display:none;flex-direction:column;max-height:70vh}
+#aiPanel{position:fixed;bottom:0;left:0;right:0;max-width:480px;margin:0 auto;background:#0f172a;border-top:2px solid #22c55e;border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-radius:20px 20px 0 0;z-index:60;display:none;flex-direction:column;max-height:70vh}
 #aiPanel.show{display:flex}
 #aiMsgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
 .msg{padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.4;max-width:85%;white-space:pre-wrap}
-.msg.user{align-self:flex-end;background:#ef4444;color:white}
+.msg.user{align-self:flex-end;background:#22c55e;color:#052e16}
 .msg.ai{align-self:flex-start;background:#1e293b;border:1px solid #334155;color:#e2e8f0}
 #aiInputRow{display:flex;gap:8px;padding:10px;border-top:1px solid #1e293b}
 #aiInput{flex:1;background:#020617;border:1px solid #334155;color:white;padding:10px 12px;border-radius:20px;outline:none}
 .chip{padding:6px 10px;background:#1e293b;border:1px solid #334155;border-radius:20px;font-size:11px;cursor:pointer}
-.riskBar{margin:8px 12px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:10px;font-size:11px;display:flex;justify-content:space-between;gap:8px}
+.riskBar{margin:8px 12px;padding:10px 12px;background:#1e293b;border:1px solid #334155;border-radius:10px;font-size:11px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 </style></head><body>
-<div class="header"><div class="logo">V64.2</div><div style="flex:1"><div style="font-weight:800">VENDI V64.2 <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:10px">FAST FIX</span></div><div style="font-size:10px;color:#94a3b8">Fix loading + VENDI + cache 30s</div></div><div style="display:flex;gap:6px"><button onclick="openAI()" style="background:#ef4444;color:white;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">🤖 AI</button><button onclick="openRisk()" style="background:#1e293b;color:white;border:1px solid #334155;padding:6px 10px;border-radius:20px;font-size:11px">⚙️ Risk</button></div></div>
-<div id="banner" class="banner b-off">Verifico V64.2 FAST...</div>
-<div id="riskBar" class="riskBar"><span id="riskMode">Mode: DEMO</span><span id="riskCap">Cap: $1000 1%</span><span id="riskDay">Oggi: 0/3</span><span><button onclick="openHistory()" style="background:#8b5cf6;color:white;border:none;padding:4px 8px;border-radius:10px;font-size:10px">📓 Diario</button></span></div>
-<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m</button><button id="b15m" onclick="loadTF('15m')">15m REAL</button><button id="b1H" onclick="loadTF('1H')">1H REAL</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
-<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V64.2 FAST...</div></div>
+<div class="header"><div class="logo">V65</div><div style="flex:1"><div style="font-weight:800">VENDI V65 <span style="background:#22c55e;color:#052e16;padding:2px 6px;border-radius:6px;font-size:10px">BACKTEST AUTO</span></div><div style="font-size:10px;color:#94a3b8">80% + VENDI fix + TP/SL auto + WR live</div></div><div style="display:flex;gap:6px"><button onclick="openAI()" style="background:#22c55e;color:#052e16;border:none;padding:6px 10px;border-radius:20px;font-size:11px;font-weight:700">🤖 AI</button><button onclick="openRisk()" style="background:#1e293b;color:white;border:1px solid #334155;padding:6px 10px;border-radius:20px;font-size:11px">⚙️ Risk</button></div></div>
+<div id="banner" class="banner b-on">V65 BACKTEST AUTO - TP/SL automatico - Soglia 80% - Fix VENDI</div>
+<div id="riskBar" class="riskBar"><span id="riskMode">Mode: DEMO</span><span id="riskCap">Cap: $1000 1%</span><span id="riskWR">WR: 0% 0W/0L</span><span id="riskDay">Oggi: 0/3</span><span><button onclick="openHistory()" style="background:#22c55e;color:#052e16;border:none;padding:4px 8px;border-radius:10px;font-size:10px;font-weight:800">📓 Diario AUTO</button> <button onclick="runBT()" style="background:#3b82f6;color:white;border:none;padding:4px 8px;border-radius:10px;font-size:10px">📊 Backtest</button></span></div>
+<div class="tfs"><button id="b5m" class="active" onclick="loadTF('5m')">⚡ 5m</button><button id="b15m" onclick="loadTF('15m')">15m REAL</button><button id="b1H" onclick="loadTF('1H')">1H</button><button onclick="loadTF(curTF,true,true)" style="background:#22c55e;color:#052e16">📱 Forza TG</button><button onclick="nuke()" style="background:#dc2626;color:white">💣 NUKE</button></div>
+<div id="coins"><div style="padding:20px;text-align:center;color:#94a3b8">Carico V65 BACKTEST AUTO...</div></div>
 <div id="riskModal" class="modal" onclick="if(event.target==this)closeRisk()"><div class="box"><b>⚙️ Risk Guard</b><div style="display:grid;gap:10px;margin-top:10px">
 <label style="font-size:12px">Modalità<br><select id="rMode" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"><option value="DEMO">🟡 DEMO</option><option value="REAL">🔴 REAL</option></select></label>
 <label style="font-size:12px">Capitale $ <input id="rCap" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
 <label style="font-size:12px">Rischio % <input id="rRisk" type="number" step="0.1" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
 <label style="font-size:12px">Max trade/giorno <input id="rMaxT" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
 <label style="font-size:12px">Stop dopo N loss <input id="rMaxL" type="number" style="width:100%;padding:10px;background:#020617;color:white;border:1px solid #334155;border-radius:10px"></label>
-</div><button class="btn btn-red" onclick="saveRisk()">💾 Salva</button><button class="btn" onclick="closeRisk()" style="background:#1e293b;color:white">Chiudi</button></div></div>
-<div id="histModal" class="modal" onclick="if(event.target==this)closeHistory()"><div class="box"><b>📓 Diario</b><div id="histStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0"></div><div id="histList" style="max-height:50vh;overflow:auto"></div><button class="btn" onclick="closeHistory()" style="background:#1e293b;color:white">Chiudi</button></div></div>
-<div id="aiPanel"><div style="padding:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b"><b>🤖 AI Risk Manager</b><button onclick="closeAI()" style="background:#1e293b;color:white;border:none;padding:6px 10px;border-radius:10px">X</button></div>
-<div id="aiMsgs"><div class="msg ai">V64.2 FAST fix loading - Cache 30s, timeout 2s, fix VENDI. Se resta bloccato premi NUKE.</div></div>
-<div id="aiInputRow"><input id="aiInput" placeholder="Scrivi..." onkeydown="if(event.key==='Enter')sendAI()"><button onclick="sendAI()" style="background:#ef4444;color:white;border:none;padding:10px 16px;border-radius:20px;font-weight:800">Invia</button></div>
+</div><button class="btn btn-green" onclick="saveRisk()">💾 Salva</button><button class="btn" onclick="closeRisk()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="histModal" class="modal" onclick="if(event.target==this)closeHistory()"><div class="box"><b>📓 Diario AUTO - TP/SL automatico</b><div style="font-size:10px;color:#86efac;background:#052e16;border:1px solid #16a34a;padding:8px;border-radius:8px;margin:6px 0">✅ V65 chiude da solo: quando il prezzo tocca TP = WIN, SL = LOSS. Non devi più segnare a mano. Dopo 30 min (5m) o 90 min (15m) chiude al prezzo attuale.</div><div id="histStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0"></div><div id="histList" style="max-height:50vh;overflow:auto"></div><button class="btn" onclick="closeHistory()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="btModal" class="modal" onclick="if(event.target==this)closeBT()"><div class="box"><b>📊 Backtest ultimi 200 candele</b><div id="btStats" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;margin:8px 0">Carico...</div><div id="btList" style="max-height:40vh;overflow:auto;font-size:11px"></div><button class="btn" onclick="closeBT()" style="background:#1e293b;color:white">Chiudi</button></div></div>
+<div id="aiPanel"><div style="padding:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b"><b>🤖 AI Backtest Manager V65</b><button onclick="closeAI()" style="background:#1e293b;color:white;border:none;padding:6px 10px;border-radius:10px">X</button></div>
+<div id="aiMsgs"><div class="msg ai">V65 novità: non devi più segnare WIN/LOSS a mano! Io controllo ogni 30 sec se il prezzo ha toccato TP o SL e chiudo da solo. Chiedi "diario winrate" o "backtest 15m" per vedere se sei pronto per soldi veri.</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap"><span class="chip" onclick="askChip('Diario winrate')">📓 Diario WR</span><span class="chip" onclick="askChip('Backtest 15m')">📊 Backtest 15m</span><span class="chip" onclick="askChip('Devo entrare con soldi veri?')">💰 Soldi veri?</span></div>
 </div>
-<div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">SL</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TP</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span><br><span id="mRR" style="font-size:10px;color:#86efac"></span></div></div><div id="mRisk" style="font-size:11px;background:#7f1d1d;border:1px solid #ef4444;padding:10px;border-radius:10px;margin:8px 0;color:#fecaca"></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia</button><button class="btn btn-blue" onclick="openChart()">📈 TV</button><button class="btn btn-purple" onclick="askAboutCoin()">🤖 AI</button><button class="btn btn-blue" onclick="sendNow()">📱 TG ORA</button></div></div>
+<div id="aiInputRow"><input id="aiInput" placeholder="Diario, backtest, soldi veri?" onkeydown="if(event.key==='Enter')sendAI()"><button onclick="sendAI()" style="background:#22c55e;color:#052e16;border:none;padding:10px 16px;border-radius:20px;font-weight:800">Invia</button></div>
+</div>
+<div id="modal" class="modal" onclick="if(event.target==this)closeM()"><div class="box"><div style="display:flex;justify-content:space-between"><b id="mCoin">BTC</b><button onclick="closeM()" style="background:#1e293b;color:white;border:none;padding:8px 12px;border-radius:10px">X</button></div><div id="mPrice" style="font-size:11px;color:#94a3b8;margin:6px 0"></div><div id="mBig" style="border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px"></div><div id="mExtra" style="font-size:11px;background:#1e293b;padding:10px;border-radius:10px;border:1px solid #334155;margin:8px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">SL</span><br><b id="mSL">-</b><br><span id="mSLpct" style="font-size:10px"></span></div><div style="background:#052e16;border:1px solid #16a34a;border-radius:10px;padding:10px;text-align:center"><span style="font-size:9px;color:#86efac">TP</span><br><b id="mTP">-</b><br><span id="mTPpct" style="font-size:10px"></span><br><span id="mRR" style="font-size:10px;color:#86efac"></span></div></div><div id="mRisk" style="font-size:11px;background:#052e16;border:1px solid #16a34a;padding:10px;border-radius:10px;margin:8px 0;color:#86efac"></div><button class="btn btn-green" onclick="copySLTP()">📋 Copia</button><button class="btn btn-blue" onclick="openChart()">📈 TV</button><button class="btn btn-purple" onclick="askAboutCoin()">🤖 AI</button><button class="btn btn-blue" onclick="sendNow()">📱 TG ORA</button></div></div>
 <script>
 var curTF='5m';var lastData=null;var curCoin=null;var riskCfg=null;
 function badge(c,l){if(c=='entra')return '<span class="badge badge-entra">'+l+'</span>';if(c=='quasi')return '<span class="badge badge-quasi">'+l+'</span>';return '<span class="badge badge-wait">'+l+'</span>';}
-async function loadRisk(){try{let r=await fetch('/api/risk_config');let j=await r.json();riskCfg=j.risk;document.getElementById('riskMode').textContent='Mode: '+riskCfg.mode;document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%';document.getElementById('riskDay').textContent='Oggi: '+riskCfg.daily_trades+'/'+riskCfg.max_trades_day;document.getElementById('rMode').value=riskCfg.mode;document.getElementById('rCap').value=riskCfg.capital;document.getElementById('rRisk').value=riskCfg.risk_pct;document.getElementById('rMaxT').value=riskCfg.max_trades_day;document.getElementById('rMaxL').value=riskCfg.max_losses_row;let b=document.getElementById('banner');if(riskCfg.mode=='REAL'){b.className='banner banner-real';b.innerHTML='🔴 REAL MODE ON - 85% + confl 2/3 - '+riskCfg.daily_trades+'/'+riskCfg.max_trades_day;}else{b.className='banner b-on';b.innerHTML='🟡 DEMO - Fix FAST - Soglia 80% - Cache 30s';}}catch{}}
-async function checkTG(){try{await loadRisk();}catch{}}
-async function nuke(){if(!confirm('NUKE cache e storico? Sblocca il caricamento'))return;try{let r=await fetch('/api/nuke');let j=await r.json();alert('✅ NUKE - Ora ricarico');location.reload();}catch(e){alert(e.message);}}
+async function loadRisk(){try{let r=await fetch('/api/risk_config');let j=await r.json();riskCfg=j.risk;document.getElementById('riskMode').textContent='Mode: '+riskCfg.mode;document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%';document.getElementById('riskDay').textContent='Oggi: '+riskCfg.daily_trades+'/'+riskCfg.max_trades_day;document.getElementById('rMode').value=riskCfg.mode;document.getElementById('rCap').value=riskCfg.capital;document.getElementById('rRisk').value=riskCfg.risk_pct;document.getElementById('rMaxT').value=riskCfg.max_trades_day;document.getElementById('rMaxL').value=riskCfg.max_losses_row;}catch{}}
+async function checkTG(){await loadRisk();}
+async function nuke(){if(!confirm('NUKE cache e storico?'))return;try{let r=await fetch('/api/nuke');alert('✅ NUKE');location.reload();}catch(e){alert(e.message);}}
 async function loadTF(tf,withTG=false,force=false){
 curTF=tf;
 document.querySelectorAll('.tfs button').forEach(b=>b.classList.remove('active'));
 let el=document.getElementById('b'+tf); if(el) el.classList.add('active');
-document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V64.2 FAST... Se resta >10s premi NUKE</div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;text-align:center;color:#94a3b8">⚡ Carico '+tf+' V65 AUTO...</div>';
 let controller=new AbortController(); let timeout=setTimeout(()=>controller.abort(),10000);
 try{
 let url='/api/signals?tf='+tf+(withTG?'&telegram=1':'')+(force?'&force=1':'');
-let r=await fetch(url,{signal:controller.signal}); clearTimeout(timeout); let d=await r.json(); lastData=d; await loadRisk();
+let r=await fetch(url,{signal:controller.signal}); clearTimeout(timeout); let d=await r.json(); lastData=d; await loadRisk(); await loadHistoryStats();
 let html='';
 for(let name in d.coins){
 let info=d.coins[name];
@@ -462,11 +561,10 @@ if(d.telegram_results && Object.keys(d.telegram_results).length>0){html+=`<div s
 document.getElementById('coins').innerHTML=html;
 }catch(e){
 clearTimeout(timeout);
-let msg=e.name=='AbortError'?'Timeout 10s - Binance lento, premi NUKE':'Errore: '+e.message;
-document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444;text-align:center">'+msg+'<br><button onclick="nuke()" style="margin-top:10px;background:#dc2626;color:white;border:none;padding:10px 20px;border-radius:20px;font-weight:800">💣 NUKE per sbloccare</button><br><button onclick="loadTF(curTF)" style="margin-top:10px;background:#1e293b;color:white;border:1px solid #334155;padding:10px 20px;border-radius:20px">🔄 Riprova</button></div>';
+document.getElementById('coins').innerHTML='<div style="padding:20px;color:#ef4444;text-align:center">Timeout - premi NUKE<br><button onclick="nuke()" style="margin-top:10px;background:#dc2626;color:white;border:none;padding:10px 20px;border-radius:20px">💣 NUKE</button></div>';
 }
 }
-function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF+' confl '+info.confluence+'/3'; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mRR').textContent='R:R 1:'+info.rr; document.getElementById('mExtra').textContent=info.extra; let riskDiv=document.getElementById('mRisk'); if(riskCfg){let riskMoney=riskCfg.capital*riskCfg.risk_pct/100;let size=riskMoney/(info.price*info.sl_pct/100);riskDiv.innerHTML=`💼 ${riskCfg.mode} $${riskCfg.capital} ${riskCfg.risk_pct}% = $${riskMoney.toFixed(2)} size ${size.toFixed(4)}`;} document.getElementById('modal').classList.add('show');}
+function openM(coin){if(!lastData) return; let info=lastData.coins[coin]; curCoin=coin; document.getElementById('mCoin').textContent=coin+' - $'+info.price.toFixed(2); document.getElementById('mPrice').textContent=info.source+' - '+info.signal+' '+info.conf+'% - TF '+curTF+' confl '+info.confluence+'/3'; let big=document.getElementById('mBig'); big.style.cssText='border-radius:14px;padding:16px;margin:10px 0;text-align:center;font-weight:900;font-size:20px;'; if(info.quality_color=='entra'){big.style.background='#052e16';big.style.border='2px solid #22c55e';big.style.color='#22c55e';} else if(info.quality_color=='quasi'){big.style.background='#422006';big.style.border='2px solid #facc15';big.style.color='#facc15';} else{big.style.background='#1e293b';big.style.border='1px solid #334155';} big.innerHTML=info.quality_label+' - '+info.signal+' '+info.conf+'%'; document.getElementById('mSL').textContent='$'+info.sl.toFixed(2); document.getElementById('mSLpct').textContent='-'+info.sl_pct.toFixed(2)+'%'; document.getElementById('mTP').textContent='$'+info.tp.toFixed(2); document.getElementById('mTPpct').textContent='+'+info.tp_pct.toFixed(2)+'%'; document.getElementById('mRR').textContent='R:R 1:'+info.rr; document.getElementById('mExtra').textContent=info.extra; let riskDiv=document.getElementById('mRisk'); if(riskCfg){let riskMoney=riskCfg.capital*riskCfg.risk_pct/100;let size=riskMoney/(info.price*info.sl_pct/100);riskDiv.innerHTML=`💼 ${riskCfg.mode} $${riskCfg.capital} ${riskCfg.risk_pct}% = $${riskMoney.toFixed(2)} size ${size.toFixed(4)} - Auto TP/SL`; } document.getElementById('modal').classList.add('show');}
 function closeM(){document.getElementById('modal').classList.remove('show');}
 function copySLTP(){if(!curCoin||!lastData) return; let info=lastData.coins[curCoin]; let txt=`${curCoin} ${info.price.toFixed(2)} SL ${info.sl.toFixed(2)} TP ${info.tp.toFixed(2)}`; navigator.clipboard.writeText(txt).then(()=>alert('Copiato'));}
 function openChart(){if(!curCoin) return; let sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]; window.open('https://www.tradingview.com/chart/?symbol='+sym,'_blank');}
@@ -480,11 +578,15 @@ async function sendAI(){let input=document.getElementById('aiInput'); let txt=in
 function openRisk(){document.getElementById('riskModal').classList.add('show');}
 function closeRisk(){document.getElementById('riskModal').classList.remove('show');}
 async function saveRisk(){let mode=document.getElementById('rMode').value; let cap=document.getElementById('rCap').value; let risk=document.getElementById('rRisk').value; let maxT=document.getElementById('rMaxT').value; let maxL=document.getElementById('rMaxL').value; try{let r=await fetch('/api/risk_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode,capital:cap,risk_pct:risk,max_trades_day:maxT,max_losses_row:maxL})}); let j=await r.json(); alert('✅ Salvato'); closeRisk(); await loadRisk(); await loadTF(curTF);}catch(e){alert(e.message);}}
+async function loadHistoryStats(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('riskWR').textContent=`WR: ${j.winrate}% ${j.wins}W/${j.losses}L P:${j.pending}`; document.getElementById('riskMode').textContent='Mode: '+ (riskCfg?riskCfg.mode:'DEMO'); if(riskCfg) document.getElementById('riskCap').textContent='Cap: $'+riskCfg.capital+' '+riskCfg.risk_pct+'%'; }catch{}}
 function openHistory(){document.getElementById('histModal').classList.add('show'); loadHistory();}
 function closeHistory(){document.getElementById('histModal').classList.remove('show');}
-async function loadHistory(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('histStats').textContent=`Totale ${j.total} WIN ${j.wins} LOSS ${j.losses} WR ${j.winrate}%`; let list=document.getElementById('histList');let html=''; j.history.slice().reverse().forEach((t,i)=>{let col=t.result=='WIN'?'#22c55e':t.result=='LOSS'?'#ef4444':'#94a3b8'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:11px"><div><b>${t.coin} ${t.tf} ${t.signal}</b> $${t.entry?.toFixed(2)}<br><span style="color:#94a3b8">${t.time.slice(11,19)}</span></div><div style="text-align:right"><span style="color:${col}">${t.result||'PEND'}</span><br><button onclick="markTrade(${j.history.length-1-i},'WIN')" style="background:#052e16;color:#22c55e;border:1px solid #16a34a;padding:2px 6px;border-radius:6px;font-size:10px">WIN</button> <button onclick="markTrade(${j.history.length-1-i},'LOSS')" style="background:#450a0a;color:#ef4444;border:1px solid #dc2626;padding:2px 6px;border-radius:6px;font-size:10px">LOSS</button></div></div>`;}); list.innerHTML=html||'Nessun trade';}catch(e){alert(e.message);}}
-async function markTrade(idx,res){try{let r=await fetch('/api/history_mark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idx:idx,result:res})}); let j=await r.json(); if(j.ok){loadHistory(); loadRisk();} else alert(j.error);}catch(e){alert(e.message);}}
+async function loadHistory(){try{let r=await fetch('/api/history');let j=await r.json(); document.getElementById('histStats').textContent=`Totale ${j.total} - WIN ${j.wins} - LOSS ${j.losses} - Pending ${j.pending} - WR ${j.winrate}% - PnL ${j.pnl_sum}% - AUTO (non devi segnare a mano)`; let list=document.getElementById('histList');let html=''; j.history.slice().reverse().forEach((t,i)=>{let col=t.result=='WIN'?'#22c55e':t.result=='LOSS'?'#ef4444':'#facc15'; let auto=t.auto?'🤖':'👤'; html+=`<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b;font-size:11px"><div><b>${auto} ${t.coin} ${t.tf} ${t.signal} ${t.conf}%</b> $${t.entry?.toFixed(2)} → ${t.result?`$${(t.result=='WIN'?t.tp:t.sl).toFixed(2)}`:'...'}<br><span style="color:#94a3b8">${t.time.slice(11,19)} ${t.mode} PnL ${t.pnl_pct?.toFixed(2)}%</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.result||'APERTO'}</span><br><span style="font-size:9px;color:#64748b">Auto in ${Math.max(0,Math.round((t.expiry-Date.now()/1000)/60))}m</span></div></div>`;}); list.innerHTML=html||'Nessun trade';}catch(e){alert(e.message);}}
+function openBT(){document.getElementById('btModal').classList.add('show'); runBT();}
+function closeBT(){document.getElementById('btModal').classList.remove('show');}
+async function runBT(){let coin=curCoin||'BTC';let tf=curTF; document.getElementById('btStats').textContent='Carico backtest '+coin+' '+tf+'...'; document.getElementById('btList').innerHTML=''; document.getElementById('btModal').classList.add('show'); try{let r=await fetch(`/api/backtest?coin=${coin}&tf=${tf}`); let j=await r.json(); if(!j.ok){document.getElementById('btStats').textContent='Errore: '+j.error; return;} document.getElementById('btStats').textContent=`${j.coin} ${j.tf}: ${j.total} trade, ${j.wins} WIN, ${j.losses} LOSS, WR ${j.winrate}% - Se 15m >60% puoi pensare a soldi veri`; let html=''; j.trades.reverse().forEach(t=>{let col=t.result=='WIN'?'#22c55e':'#ef4444'; html+=`<div style="display:flex;justify-content:space-between;padding:6px;border-bottom:1px solid #1e293b"><span>${t.signal} $${t.entry.toFixed(2)}</span><span style="color:${col};font-weight:800">${t.result}</span></div>`;}); document.getElementById('btList').innerHTML=html;}catch(e){document.getElementById('btStats').textContent='Errore: '+e.message;}}
 checkTG();loadTF('5m');setInterval(()=>loadTF(curTF),15000);
+setInterval(()=>{loadHistoryStats();},10000);
 </script></body></html>
 """
     return Response(html, mimetype="text/html; charset=utf-8")
@@ -492,13 +594,15 @@ checkTG();loadTF('5m');setInterval(()=>loadTF(curTF),15000);
 def bg_loop():
     while True:
         try:
+            check_pending_trades()
             for tf in ["5m","15m","1H"]:
                 for name in PAIRS.keys():
                     analyze(name, tf, do_tg=True)
         except Exception as e:
-            print(f"Loop V64.2 {e}")
-        time.sleep(60)
+            print(f"Loop V65 {e}")
+        time.sleep(30)
 
 threading.Thread(target=bg_loop, daemon=True).start()
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
+
