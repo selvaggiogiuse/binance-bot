@@ -23,6 +23,7 @@ LAST_ENTRA = {}
 STABLE_SECONDS = 300
 TRADE_HISTORY = []
 RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 3, "max_losses_row": 2, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today()), "equity": 1000.0, "peak": 1000.0, "drawdown": 0.0}
+LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
 ADAPTIVE_CONF = 82
 
@@ -48,6 +49,38 @@ def atr_calc(ohlc, period=14):
         h=ohlc[i]["high"]; l=ohlc[i]["low"]; pc=ohlc[i-1]["close"]
         tr.append(max(h-l, abs(h-pc), abs(l-pc)))
     return sum(tr[-period:])/period if tr else ohlc[-1]["close"]*0.008
+
+def ema_calc_from_closes(closes, p):
+    if len(closes) < p:
+        return [None]*len(closes)
+    k=2/(p+1)
+    ema_vals=[]
+    ema=sum(closes[:p])/p
+    for i in range(len(closes)):
+        if i < p-1:
+            ema_vals.append(None)
+        elif i == p-1:
+            ema_vals.append(ema)
+        else:
+            ema = closes[i]*k + ema*(1-k)
+            ema_vals.append(ema)
+    return ema_vals
+
+def get_klines(name, tf="5m", limit=200):
+    sym=PAIRS.get(name,"BTCUSDT")
+    interval = {"5m":"5m","15m":"15m","1H":"1h","4H":"4h"}.get(tf,"5m")
+    try:
+        r=requests.get(f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit={limit}",timeout=8,headers={"User-Agent":"Mozilla/5.0"})
+        data=r.json()
+        ohlc=[]
+        for k in data:
+            ohlc.append({"time":int(k[0]//1000),"open":float(k[1]),"high":float(k[2]),"low":float(k[3]),"close":float(k[4]),"volume":float(k[5])})
+        return ohlc
+    except Exception as e:
+        print(f"klines error {e}")
+        return []
+
+
 def sma_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
     return sum(data[-p:])/p
@@ -568,6 +601,105 @@ def api_backtest():
     if coin not in PAIRS: coin="BTC"
     res=run_backtest(coin, tf)
     return jsonify(res)
+
+@app.route("/api/ohlc")
+def api_ohlc():
+    coin=request.args.get("coin","BTC")
+    tf=request.args.get("tf","15m")
+    if coin not in PAIRS: coin="BTC"
+    klines=get_klines(coin,tf,200)
+    if not klines:
+        return jsonify({"ok":False,"error":"no klines"}),500
+    closes=[c["close"] for c in klines]
+    ema50_vals=ema_calc_from_closes(closes,50)
+    ema150_vals=ema_calc_from_closes(closes,150)
+    candles=[{"time":c["time"],"open":c["open"],"high":c["high"],"low":c["low"],"close":c["close"]} for c in klines]
+    ema50_line=[{"time":klines[i]["time"],"value":ema50_vals[i]} for i in range(len(klines)) if ema50_vals[i] is not None]
+    ema150_line=[{"time":klines[i]["time"],"value":ema150_vals[i]} for i in range(len(klines)) if ema150_vals[i] is not None]
+    last_price=closes[-1] if closes else 0
+    ema50_last=ema50_vals[-1] if ema50_vals[-1] else 0
+    ema150_last=ema150_vals[-1] if ema150_vals[-1] else 0
+    trend="BULL" if ema50_last>ema150_last else "BEAR" if ema50_last and ema150_last else "NEUTRAL"
+    return jsonify({"ok":True,"coin":coin,"tf":tf,"candles":candles,"ema50":ema50_line,"ema150":ema150_line,"last_price":last_price,"ema50_last":ema50_last,"ema150_last":ema150_last,"trend":trend})
+
+@app.route("/api/leverage", methods=["GET","POST"])
+def api_leverage():
+    global LEVERAGE_CONFIG
+    if request.method=="POST":
+        data=request.get_json() or {}
+        if "leverage" in data:
+            try:
+                lev=int(data["leverage"])
+                if lev in [1,2,3,5,10,25,50,100]:
+                    LEVERAGE_CONFIG["leverage"]=lev
+            except: pass
+        if "margin_mode" in data and data["margin_mode"] in ["ISOLATED","CROSSED"]:
+            LEVERAGE_CONFIG["margin_mode"]=data["margin_mode"]
+    lev=LEVERAGE_CONFIG["leverage"]
+    return jsonify({"ok":True,"leverage":lev,"margin_mode":LEVERAGE_CONFIG["margin_mode"],"example":f"Con 50€ a {lev}x => posizione {50*lev}€"})
+
+@app.route("/trading")
+def trading_page():
+    html2 = """
+<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V71 - TradingView Leva</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box;font-family:Inter,sans-serif}body{margin:0;background:#020617;color:#e2e8f0}
+.header{padding:12px 16px;background:#0f172a;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center}
+.badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:800}.badge-bull{background:#22c55e;color:#052e16}.badge-bear{background:#ef4444;color:white}.badge-wait{background:#1e293b;color:#94a3b8}
+.tv-wrap{margin:12px;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden}
+.tv-header{display:flex;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #1e293b}
+.lev-panel{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;background:#020617;border-top:1px solid #1e293b}
+.lev-btn{padding:6px 14px;border-radius:20px;border:1px solid #334155;background:#1e293b;color:#cbd5e1;font-weight:800;font-size:12px;cursor:pointer}
+.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}
+.btn{padding:12px;border-radius:10px;border:none;font-weight:800;cursor:pointer}
+.btn-green{background:#16a34a;color:white;flex:1}.btn-red{background:#dc2626;color:white;flex:1}
+.info{font-size:11px;color:#94a3b8;background:#020617;padding:8px 10px;border-radius:8px;border:1px solid #1e293b;margin:8px 12px}
+</style></head><body>
+<div class="header"><div><b>V71 TRADING</b> <span style="font-size:10px;color:#22c55e">SAFE - Telegram separato</span><div style="font-size:9px;color:#94a3b8">Grafico TradingView + Leva modificabile - Non tocca Telegram</div></div><div><a href="/app" style="color:#22c55e;font-size:11px">← Torna a V71 Segnali</a></div></div>
+<div class="info">🔒 Telegram continua a funzionare uguale a prima (V71). Questa pagina /trading è separata e se si rompe non blocca i segnali.</div>
+<div class="tv-wrap">
+<div class="tv-header"><div><b id="tvTitle">BTC 15m</b> <span id="tvPrice"></span> <span id="trendBadge" class="badge badge-wait">--</span></div><div style="font-size:10px"><span id="ema50">EMA50: --</span> | <span id="ema150">EMA150: --</span></div></div>
+<div id="chart" style="width:100%;height:420px"></div>
+<div class="lev-panel">
+<div style="width:100%;font-size:11px;font-weight:800;color:#86efac">⚡ LEVA - Clicca per cambiare (come Bybit EU): <span id="levInfo" style="color:#cbd5e1"></span></div>
+<button class="lev-btn" data-lev="1" onclick="setLev(1)">1x</button>
+<button class="lev-btn" data-lev="3" onclick="setLev(3)">3x</button>
+<button class="lev-btn" data-lev="5" onclick="setLev(5)">5x</button>
+<button class="lev-btn active" data-lev="10" onclick="setLev(10)">10x</button>
+<button class="lev-btn" data-lev="25" onclick="setLev(25)">25x</button>
+<button class="lev-btn" data-lev="50" onclick="setLev(50)">50x</button>
+<button class="lev-btn" data-lev="100" onclick="setLev(100)">100x</button>
+<div style="width:100%;display:flex;gap:8px;margin-top:8px">
+<button class="btn btn-green" onclick="order('LONG')">🟢 LONG</button>
+<button class="btn btn-red" onclick="order('SHORT')">🔴 SHORT</button>
+</div>
+<div id="calc" style="width:100%;font-size:10px;color:#94a3b8;margin-top:6px"></div>
+</div>
+</div>
+<div style="margin:12px;display:flex;gap:6px">
+<button onclick="loadTF('5m')" id="b5m" style="padding:6px 12px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155">5m</button>
+<button onclick="loadTF('15m')" id="b15m" style="padding:6px 12px;border-radius:20px;background:#22c55e;color:#052e16" class="active">15m</button>
+<button onclick="loadTF('1H')" id="b1H" style="padding:6px 12px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155">1H</button>
+<button onclick="loadTF('4H')" id="b4H" style="padding:6px 12px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155">4H</button>
+<select id="coinSel" onchange="changeCoin()" style="padding:6px 12px;border-radius:20px;background:#0f172a;color:white;border:1px solid #334155"><option>BTC</option><option>ETH</option><option>ORO</option></select>
+</div>
+<script>
+let curTF='15m',curCoin='BTC',chart,candleSeries,ema50S,ema150S,lastData,lev=10;
+function init(){const el=document.getElementById('chart');chart=LightweightCharts.createChart(el,{layout:{background:{color:'#0f172a'},textColor:'#cbd5e1'},grid:{vertLines:{color:'#1e293b'},horzLines:{color:'#1e293b'}},width:el.clientWidth,height:420});candleSeries=chart.addCandlestickSeries({upColor:'#22c55e',downColor:'#ef4444',wickUpColor:'#22c55e',wickDownColor:'#ef4444'});ema50S=chart.addLineSeries({color:'#3b82f6',lineWidth:2});ema150S=chart.addLineSeries({color:'#8b5cf6',lineWidth:2});window.addEventListener('resize',()=>chart.applyOptions({width:el.clientWidth}))}
+async function loadTF(tf){curTF=tf;document.querySelectorAll('[id^=b]').forEach(b=>b.style.background='#1e293b');document.getElementById('b'+tf).style.background='#22c55e';loadChart()}
+function changeCoin(){curCoin=document.getElementById('coinSel').value;loadChart()}
+async function loadChart(){if(!chart)init();document.getElementById('tvTitle').textContent=curCoin+' '+curTF;let r=await fetch(`/api/ohlc?coin=${curCoin}&tf=${curTF}`);let j=await r.json();if(!j.ok)return;lastData=j;candleSeries.setData(j.candles);ema50S.setData(j.ema50);ema150S.setData(j.ema150);chart.timeScale().fitContent();document.getElementById('tvPrice').textContent=j.last_price.toFixed(2);document.getElementById('ema50').textContent='EMA50: '+j.ema50_last.toFixed(2);document.getElementById('ema150').textContent='EMA150: '+j.ema150_last.toFixed(2);let badge=document.getElementById('trendBadge');badge.textContent=j.trend+(j.trend=='BULL'?' 📈 SALIRA':' 📉 SCENDERA');badge.className='badge '+(j.trend=='BULL'?'badge-bull':'badge-bear');updateCalc()}
+async function setLev(l){lev=l;document.querySelectorAll('.lev-btn').forEach(b=>b.classList.remove('active'));document.querySelector(`[data-lev="${l}"]`).classList.add('active');await fetch('/api/leverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({leverage:l})});let r=await fetch('/api/leverage');let j=await r.json();document.getElementById('levInfo').textContent=j.example;updateCalc()}
+function updateCalc(){if(!lastData)return;let p=lastData.last_price;let longLiq=p*(1-0.8/lev);let shortLiq=p*(1+0.8/lev);let pos=50*lev;document.getElementById('calc').innerHTML=`Con 50€ a ${lev}x = posizione <b>${pos}€</b> | Entry ${p.toFixed(2)} | Liq LONG ${longLiq.toFixed(2)} | Liq SHORT ${shortLiq.toFixed(2)} | Margine ${(50/lev).toFixed(2)}€ | Se EMA50 sopra EMA150 il mercato tende a SALIRE (come nel tuo screen ORO)`}
+function order(side){if(!lastData){alert('Carico...');return}let p=lastData.last_price;alert(`${side} ${curCoin} @ ${p.toFixed(2)} leva ${lev}x\nPosizione 50€ x ${lev} = ${50*lev}€\nCopialo su Bybit EU con leva ${lev}x ISOLATED`)}
+init();loadTF('15m');setLev(10);
+</script></body></html>
+    """
+    return Response(html2, mimetype="text/html; charset=utf-8")
+
+
 @app.route("/app")
 def app_page():
     html="""
@@ -715,3 +847,4 @@ def bg_loop():
 threading.Thread(target=bg_loop, daemon=True).start()
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
+
