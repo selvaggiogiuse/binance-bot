@@ -25,6 +25,8 @@ TRADE_HISTORY = []
 RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 3, "max_losses_row": 2, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today()), "equity": 1000.0, "peak": 1000.0, "drawdown": 0.0}
 LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
+USER_TRADES = []
+TRADE_ID_COUNTER = 1
 ADAPTIVE_CONF = 82
 
 def ema_calc(data, p):
@@ -684,11 +686,99 @@ def api_bybit_close():
     return jsonify({"ok":True,"msg":f"Chiusura {symbol} inviata a Bybit EU"})
 
 
+
+@app.route("/api/my_trades", methods=["GET","POST"])
+def api_my_trades():
+    global USER_TRADES, TRADE_ID_COUNTER
+    if request.method=="GET":
+        # aggiorna PnL in tempo reale per ogni trade aperto
+        out=[]
+        for t in USER_TRADES:
+            try:
+                price = get_price(t["coin"]) or t["entry"]
+            except:
+                price = t["entry"]
+            entry=t["entry"]
+            lev=t.get("leverage",10)
+            cap=t.get("capital",50)
+            side=t.get("side","LONG")
+            if side=="LONG":
+                pnl_pct=(price-entry)/entry*100*lev
+            else:
+                pnl_pct=(entry-price)/entry*100*lev
+            pnl_eur=cap*pnl_pct/100
+            t_copy=dict(t)
+            t_copy["current_price"]=price
+            t_copy["pnl_pct"]=round(pnl_pct,2)
+            t_copy["pnl_eur"]=round(pnl_eur,2)
+            out.append(t_copy)
+        return jsonify({"ok":True,"trades":out})
+    else:
+        data=request.get_json() or {}
+        coin=data.get("coin","BTC")
+        side=data.get("side","LONG")
+        entry=float(data.get("entry",0))
+        leverage=int(data.get("leverage",10))
+        capital=float(data.get("capital",50))
+        sl=data.get("sl")
+        tp=data.get("tp")
+        if not entry:
+            try:
+                entry=get_price(coin) or 0
+            except:
+                entry=0
+        if not entry:
+            return jsonify({"ok":False,"error":"entry mancante"}),400
+        trade={
+            "id":TRADE_ID_COUNTER,
+            "coin":coin,
+            "side":side,
+            "entry":entry,
+            "leverage":leverage,
+            "capital":capital,
+            "sl":float(sl) if sl else None,
+            "tp":float(tp) if tp else None,
+            "time":rome_now().isoformat(),
+            "status":"APERTO"
+        }
+        USER_TRADES.append(trade)
+        TRADE_ID_COUNTER+=1
+        return jsonify({"ok":True,"trade":trade})
+
+@app.route("/api/my_trades/close", methods=["POST"])
+def api_my_trades_close():
+    global USER_TRADES
+    data=request.get_json() or {}
+    tid=int(data.get("id",0))
+    for t in USER_TRADES:
+        if t["id"]==tid and t["status"]=="APERTO":
+            try:
+                price=get_price(t["coin"]) or t["entry"]
+            except:
+                price=t["entry"]
+            entry=t["entry"]
+            lev=t.get("leverage",10)
+            cap=t.get("capital",50)
+            side=t.get("side","LONG")
+            if side=="LONG":
+                pnl_pct=(price-entry)/entry*100*lev
+            else:
+                pnl_pct=(entry-price)/entry*100*lev
+            pnl_eur=cap*pnl_pct/100
+            t["status"]="CHIUSO"
+            t["close_price"]=price
+            t["pnl_pct"]=round(pnl_pct,2)
+            t["pnl_eur"]=round(pnl_eur,2)
+            t["close_time"]=rome_now().isoformat()
+            return jsonify({"ok":True,"trade":t})
+    return jsonify({"ok":False,"error":"trade non trovato"}),404
+
+
 @app.route("/trading")
 def trading_page():
     html2 = """
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>V72 Perfetta - TradingView + Leva + Chiusura</title>
+<title>V73 - I Miei Trade Visibili</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,sans-serif}body{margin:0;background:#020617;color:#e2e8f0}
 .header{padding:12px 16px;background:#020617;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center}
@@ -699,12 +789,14 @@ def trading_page():
 .lev-btn{padding:7px 14px;border-radius:20px;border:1px solid #334155;background:#1e293b;color:#cbd5e1;font-weight:800;font-size:12px;cursor:pointer}
 .lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}
 .btn{padding:12px;border-radius:10px;border:none;font-weight:800;cursor:pointer}
-.btn-green{background:#16a34a;color:white;flex:1}.btn-red{background:#dc2626;color:white;flex:1}.btn-close{background:#f59e0b;color:#000;flex:1}
+.btn-green{background:#16a34a;color:white;flex:1}.btn-red{background:#dc2626;color:white;flex:1}.btn-close{background:#f59e0b;color:#000;flex:1}.btn-small{padding:6px 10px;border-radius:20px;font-size:11px}
 .info{font-size:11px;color:#94a3b8;background:#1e293b;padding:8px 10px;border-radius:8px;border:1px solid #334155;margin:8px 12px;line-height:1.4}
-.input-cap{padding:8px 10px;border-radius:20px;background:#020617;color:white;border:1px solid #334155;width:100px;text-align:center;font-weight:800}
+.input-cap{padding:8px 10px;border-radius:20px;background:#020617;color:white;border:1px solid #334155;width:90px;text-align:center;font-weight:800}
+.trade-card{display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid #1e293b;font-size:12px}
+.trade-card.bull{border-left:3px solid #22c55e}.trade-card.bear{border-left:3px solid #ef4444}
 </style></head><body>
-<div class="header"><div><b>V72 PERFETTA</b> <span style="font-size:10px;color:#22c55e">Telegram safe + Chiusura trade</span><div style="font-size:10px;color:#94a3b8">TradingView ufficiale + Capitale modificabile + Leva + Chiudi</div></div><div><a href="/app" style="color:#22c55e;font-size:12px;text-decoration:none">Torna a V71 Segnali</a></div></div>
-<div class="info">Telegram resta su /app identico. Qui su /trading hai grafico TradingView vero (come Bybit) + calcoli con i tuoi EUR + chiusura.<br>1) Scegli coin e leva 2) Inserisci capitale (es. 50) 3) Apri su Bybit EU 4) Chiudi da qui con tasto CHIUDI.</div>
+<div class="header"><div><b>V73 TRADE VISIBILI</b> <span style="font-size:10px;color:#22c55e">Telegram safe</span><div style="font-size:10px;color:#94a3b8">TradingView + Leva + I Miei Trade</div></div><div><a href="/app" style="color:#22c55e;font-size:12px;text-decoration:none">Torna a V71</a></div></div>
+<div class="info">Quando apri su Bybit EU, clicca LONG/SHORT qui sotto e il trade appare in <b>I MIEI TRADE</b> con PnL live. Telegram resta su /app identico.</div>
 
 <div class="tv-wrap">
 <div class="tv-header">
@@ -714,8 +806,7 @@ def trading_page():
 <select id="tfSel" onchange="changeTF()" style="padding:6px 10px;border-radius:20px;background:#020617;color:white;border:1px solid #334155"><option value="5">5m</option><option value="15" selected>15m</option><option value="60">1H</option><option value="240">4H</option></select>
 </div>
 </div>
-
-<div id="tradingview_chart" style="height:460px;width:100%"></div>
+<div id="tradingview_chart" style="height:420px;width:100%"></div>
 
 <div class="lev-panel">
 <div style="width:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -724,7 +815,6 @@ def trading_page():
 <span style="font-size:12px;color:#cbd5e1">EUR</span>
 <div style="margin-left:auto;font-size:12px;font-weight:800;color:#86efac">LEVA: <span id="levInfo" style="color:#cbd5e1;font-weight:400"></span></div>
 </div>
-
 <div style="width:100%;display:flex;gap:6px;margin-top:6px">
 <button class="lev-btn" data-lev="1" onclick="setLev(1)">1x</button>
 <button class="lev-btn" data-lev="3" onclick="setLev(3)">3x</button>
@@ -734,16 +824,17 @@ def trading_page():
 <button class="lev-btn" data-lev="50" onclick="setLev(50)">50x</button>
 <button class="lev-btn" data-lev="100" onclick="setLev(100)">100x</button>
 </div>
-
 <div style="width:100%;display:flex;gap:8px;margin-top:10px">
-<button class="btn btn-green" onclick="order('LONG')">LONG</button>
-<button class="btn btn-red" onclick="order('SHORT')">SHORT</button>
-<button class="btn btn-close" onclick="closePos()">CHIUDI</button>
+<button class="btn btn-green" onclick="openTrade('LONG')">LONG + Salva</button>
+<button class="btn btn-red" onclick="openTrade('SHORT')">SHORT + Salva</button>
+</div>
+<div id="calc" style="width:100%;font-size:11px;color:#94a3b8;margin-top:10px;line-height:1.5;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b"></div>
+</div>
 </div>
 
-<div id="calc" style="width:100%;font-size:11px;color:#94a3b8;margin-top:10px;line-height:1.5;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b"></div>
-<div id="pnlBox" style="width:100%;font-size:11px;color:#cbd5e1;margin-top:8px;background:#052e16;border:1px solid #16a34a;padding:8px;border-radius:10px;display:none"></div>
-</div>
+<div class="tv-wrap" style="margin-top:8px">
+<div class="tv-header"><b>I MIEI TRADE</b> <span style="font-size:10px;color:#94a3b8">PnL live da Bybit price</span> <button onclick="loadMyTrades()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155;font-size:11px">Aggiorna</button></div>
+<div id="myTradesList" style="max-height:400px;overflow:auto;background:#020617">Carico...</div>
 </div>
 
 <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
@@ -796,7 +887,6 @@ async function fetchEMA(){
       badge.textContent = j.trend + (isBull ? ' - SALIRA' : ' - SCENDERA');
       badge.className = 'badge ' + (isBull ? 'badge-bull' : 'badge-bear');
       currentPrice=j.last_price;
-      // prendi SL/TP da /api/signals se disponibili
       let r2=await fetch(`/api/signals?tf=${tf}`);
       let j2=await r2.json();
       if(j2.coins && j2.coins[curCoin]){
@@ -808,7 +898,7 @@ async function fetchEMA(){
   }catch(e){console.log('EMA fetch error',e)}
 }
 
-function changeCoin(){curCoin=document.getElementById('coinSel').value;loadTV();}
+function changeCoin(){curCoin=document.getElementById('coinSel').value;loadTV();loadMyTrades();}
 function changeTF(){curTF=document.getElementById('tfSel').value;loadTV();}
 
 async function setLev(l){
@@ -831,54 +921,67 @@ function updateCalc(){
   let longLiq=p*(1-0.8/lev);
   let shortLiq=p*(1+0.8/lev);
   let pos=capital*lev;
-  let margin=capital;
-  let pnlTP=0, pnlSL=0;
-  if(lastTP && lastSL){
-    // stima PnL con leva
-    if(p>0){
-      let tpPct=Math.abs(lastTP-p)/p*100*lev;
-      let slPct=Math.abs(lastSL-p)/p*100*lev;
-      pnlTP=margin*tpPct/100;
-      pnlSL=margin*slPct/100;
-    }
-  }
   document.getElementById('calc').innerHTML=
-    `Capitale <b>${capital} EUR</b> x ${lev}x = posizione <b>${pos.toFixed(2)} EUR</b><br>`+
-    `Entry ~${p.toFixed(2)} | Liq LONG ${longLiq.toFixed(2)} | Liq SHORT ${shortLiq.toFixed(2)} | Margine ${margin.toFixed(2)} EUR<br>`+
-    `SL ${lastSL?lastSL.toFixed(2):'--'} | TP ${lastTP?lastTP.toFixed(2):'--'}<br>`+
-    `<span style="font-size:10px">Se EMA50 sopra EMA150 tende a SALIRE, altrimenti SCENDERA</span>`;
-
-  if(lastTP){
-    document.getElementById('pnlBox').style.display='block';
-    document.getElementById('pnlBox').innerHTML=`Se tocca TP +${pnlTP.toFixed(2)} EUR | Se tocca SL -${pnlSL.toFixed(2)} EUR | R:R 1:2.5 come V71`;
-  }
+    `Capitale <b>${capital} EUR</b> x ${lev}x = <b>${pos.toFixed(2)} EUR</b><br>`+
+    `Entry ~${p.toFixed(2)} | Liq LONG ${longLiq.toFixed(2)} | Liq SHORT ${shortLiq.toFixed(2)}<br>`+
+    `SL ${lastSL?lastSL.toFixed(2):'--'} TP ${lastTP?lastTP.toFixed(2):'--'} - Quando apri su Bybit, clicca LONG/SHORT + Salva qui sotto`;
 }
 
-function order(side){
+async function openTrade(side){
   let p=currentPrice||0;
-  let msg=`${side} ${curCoin} @ ~${p.toFixed(2)} leva ${lev}x
-Capitale ${capital} EUR x ${lev} = ${capital*lev} EUR
-SL ${lastSL?lastSL.toFixed(2):'--'} TP ${lastTP?lastTP.toFixed(2):'--'}
-
-Apri su Bybit EU con leva ${lev}x ISOLATED e copia SL/TP`;
-  alert(msg);
-  // copia per Bybit
-  let txt=`${curCoin} ${p.toFixed(2)} LEVA ${lev}x CAP ${capital}EUR SL ${lastSL?lastSL.toFixed(2):''} TP ${lastTP?lastTP.toFixed(2):''}`;
-  navigator.clipboard.writeText(txt);
+  capital=parseFloat(document.getElementById('capInput').value)||50;
+  let payload={coin:curCoin, side:side, entry:p, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
+  try{
+    let r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    let j=await r.json();
+    if(j.ok){
+      alert(`${side} ${curCoin} salvato! Entry ${p.toFixed(2)} leva ${lev}x
+Ora aprilo anche su Bybit EU con stessi valori. Lo vedrai sotto in I MIEI TRADE con PnL live.`);
+      loadMyTrades();
+    }else{
+      alert('Errore: '+j.error);
+    }
+  }catch(e){alert(e.message);}
 }
 
-async function closePos(){
-  let sym = curCoin=='ORO' ? 'PAXGUSDT' : curCoin+'USDT';
+async function loadMyTrades(){
   try{
-    let r=await fetch('/api/bybit/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+    let r=await fetch('/api/my_trades');
     let j=await r.json();
-    alert(j.msg||'Chiudi su Bybit EU: Vai in Posizioni -> Chiudi -> Market');
+    let list=document.getElementById('myTradesList');
+    if(!j.trades || j.trades.length==0){
+      list.innerHTML='<div style="padding:20px;text-align:center;color:#64748b">Nessun trade ancora.<br>Apri LONG/SHORT sopra e apparira qui con PnL live.</div>';
+      return;
+    }
+    let html='';
+    j.trades.slice().reverse().forEach(t=>{
+      let col=t.pnl_eur>=0?'#22c55e':'#ef4444';
+      let statusCol=t.status=='APERTO'?'#facc15':'#94a3b8';
+      let sideClass=t.side=='LONG'?'bull':'bear';
+      html+=`<div class="trade-card ${sideClass}"><div><b>${t.side} ${t.coin}</b> ${t.leverage}x ${t.capital}EUR<br><span style="font-size:10px;color:#94a3b8">Entry ${t.entry.toFixed(2)} -> Ora ${t.current_price?t.current_price.toFixed(2):'--'} | SL ${t.sl?t.sl.toFixed(2):'--'} TP ${t.tp?t.tp.toFixed(2):'--'}<br>${t.time.slice(11,19)} ${t.status}</span></div><div style="text-align:right"><span style="color:${col};font-weight:800">${t.pnl_eur>=0?'+':''}${t.pnl_eur} EUR (${t.pnl_pct}%)</span><br><span style="color:${statusCol};font-size:10px">${t.status}</span>${t.status=='APERTO'?`<br><button class="btn btn-close btn-small" onclick="closeTrade(${t.id})">CHIUDI</button>`:''}</div></div>`;
+    });
+    list.innerHTML=html;
   }catch(e){
-    alert('Vai su Bybit EU -> Posizioni -> Chiudi -> Market per chiudere. Per chiusura automatica configura BYBIT_API_KEY su Render.');
+    document.getElementById('myTradesList').innerHTML='Errore: '+e.message;
   }
 }
 
-loadTV();setLev(10);
+async function closeTrade(id){
+  if(!confirm('Chiudere trade #'+id+'?')) return;
+  try{
+    let r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+    let j=await r.json();
+    if(j.ok){
+      alert(`Chiuso! PnL ${j.trade.pnl_eur} EUR (${j.trade.pnl_pct}%) - Chiudilo anche su Bybit EU in Posizioni -> Chiudi -> Market`);
+      loadMyTrades();
+    }else{
+      alert(j.error);
+    }
+  }catch(e){alert(e.message);}
+}
+
+loadTV();setLev(10);loadMyTrades();
+setInterval(loadMyTrades, 10000);
 </script>
 </body></html>
     """
