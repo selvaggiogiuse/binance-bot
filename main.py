@@ -16,7 +16,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 TELEGRAM_MIN_CONF = 82
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V80 CLICK 100% - INLINE ONCLICK"
+VERSION = "V81 TEST CLICK - ZERO API"
 COOLDOWN = 900
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -863,170 +863,97 @@ def api_my_trades_close():
 @app.route("/trading")
 def trading_page():
     html2 = """
-<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>V80 CLICK 100%</title>
-<style>
-*{box-sizing:border-box;font-family:Inter,sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}
-.header{padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100}
-.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}
-.price-big{font-size:34px;font-weight:900;color:#22c55e;text-align:center;padding:14px;background:#020617;border-radius:12px;border:3px solid #22c55e;margin:10px 0}
-.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;font-weight:800;font-size:14px;margin:4px}
-.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e;transform:scale(1.1)}
-.btn{padding:18px;border-radius:14px;border:none;font-weight:900;cursor:pointer;font-size:18px;flex:1}
-.btn-green{background:#16a34a;color:white}.btn-red{background:#dc2626;color:white}
-.input-cap{padding:12px 16px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;width:110px;text-align:center;font-weight:800;font-size:20px}
-.sticky-trade{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}
-</style></head><body>
-<div class="header"><div><b style="font-size:20px">V80 CLICK 100%</b> <span style="color:#22c55e">INLINE ONCLICK</span><div style="font-size:11px;color:#94a3b8">Se clicchi e non cambia, fai screen errore</div></div><div><a href="/app" style="color:#22c55e;border:1px solid #22c55e;padding:8px 14px;border-radius:20px;text-decoration:none">V71</a></div></div>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V81 TEST CLICK</title>
+<style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:32px;font-weight:900;color:#22c55e;text-align:center;padding:14px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}</style>
+</head><body>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V81 TEST CLICK</b> <span style="color:#22c55e">ZERO API ALL'AVVIO</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Se clicchi deve fare ALERT subito, anche offline</div></div>
 
 <div class="card">
-<div style="display:flex;justify-content:space-between"><b id="coinTitle" style="font-size:18px">ETH 15m - PRONTO</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px;border-radius:20px;background:#020617;color:white;border:2px solid #334155"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
-<div id="priceBig" class="price-big" onclick="loadPrice()">2.503,00 $ - TOCCA PER AGGIORNARE</div>
-<div id="info" style="text-align:center;font-size:13px;color:#cbd5e1;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">EMA50: 2.480 | EMA150: 2.450 | BULL - SALIRA<br><span style="color:#22c55e">BOS: HH | SL 2.400 TP 2.600 | Conf 85%</span></div>
+<div style="display:flex;justify-content:space-between"><b>ETH 15m - TEST</b><select id="coinSel" onchange="document.getElementById('debug').textContent='Coin '+this.value; curCoin=this.value;"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
+<div id="priceBig" class="price-big" onclick="alert('Click prezzo funziona!');">2.503 $ - CLICCA QUI TEST</div>
+<div id="info" style="text-align:center;font-size:13px;color:#94a3b8">Tocca i bottoni sotto - devono fare ALERT immediato</div>
 </div>
 
 <div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-<div><span style="font-weight:800;color:#86efac">CAPITALE:</span> <input id="capInput" class="input-cap" type="number" value="50" oninput="updateCalc()" /> EUR</div>
-<div style="font-weight:800;color:#86efac">LEVA: <span id="levInfo" style="color:white;font-size:20px">10x</span></div>
+<div>CAPITALE: <input id="capInput" type="number" value="50" style="padding:10px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;width:100px;text-align:center;font-weight:800;font-size:18px"> EUR - LEVA: <span id="levInfo" style="font-weight:800;color:#22c55e">10x</span></div>
+<div style="margin-top:10px">
+<button class="lev-btn" onclick="setLeva(1); alert('Leva 1x click OK')">1x</button>
+<button class="lev-btn" onclick="setLeva(3); alert('Leva 3x click OK')">3x</button>
+<button class="lev-btn" onclick="setLeva(5); alert('Leva 5x click OK')">5x</button>
+<button class="lev-btn active" onclick="setLeva(10); alert('Leva 10x click OK')">10x</button>
+<button class="lev-btn" onclick="setLeva(25); alert('Leva 25x click OK')">25x</button>
+<button class="lev-btn" onclick="setLeva(50); alert('Leva 50x click OK')">50x</button>
+<button class="lev-btn" onclick="setLeva(100); alert('Leva 100x click OK')">100x</button>
 </div>
-<div style="display:flex;flex-wrap:wrap">
-<button class="lev-btn" onclick="setLeva(1)">1x</button>
-<button class="lev-btn" onclick="setLeva(3)">3x</button>
-<button class="lev-btn" onclick="setLeva(5)">5x</button>
-<button class="lev-btn active" onclick="setLeva(10)">10x</button>
-<button class="lev-btn" onclick="setLeva(25)">25x</button>
-<button class="lev-btn" onclick="setLeva(50)">50x</button>
-<button class="lev-btn" onclick="setLeva(100)">100x</button>
-</div>
-<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e;font-size:13px">50 EUR x 10x = 500 EUR | Entry 2503 | LONG 2252 SHORT 2753 - PRONTO</div>
-<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:11px;color:#fbbf24">V80 caricato - Clicca leva o LONG/SHORT</div>
+<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e">50 EUR x 10x = 500 EUR - PRONTO</div>
+<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V81 caricato - Tocca un bottone leva per test</div>
 </div>
 
 <div class="card">
-<b>I MIEI TRADE</b> <button onclick="loadTrades()" style="float:right;padding:6px 12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800">Aggiorna</button>
-<div id="myTradesList" style="margin-top:10px;max-height:400px;overflow:auto">Nessun trade - Clicca LONG/SHORT sotto</div>
+<b>I MIEI TRADE</b> <button onclick="alert('Click Aggiorna OK'); loadTrades();" style="float:right;padding:6px 12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800">Aggiorna Lista</button>
+<div id="myTradesList" style="margin-top:10px">Nessun trade - Clicca LONG/SHORT sotto per test</div>
 </div>
 
-<div class="sticky-trade">
-<button class="btn btn-green" onclick="doTrade('LONG')">LONG + Salva</button>
-<button class="btn btn-red" onclick="doTrade('SHORT')">SHORT + Salva</button>
+<div class="sticky">
+<button class="btn btn-green" onclick="alert('Click LONG rilevato! Ora salvo...'); doTrade('LONG');">LONG + Salva</button>
+<button class="btn btn-red" onclick="alert('Click SHORT rilevato! Ora salvo...'); doTrade('SHORT');">SHORT + Salva</button>
 </div>
 
 <script>
-var curCoin='ETH', lev=10, currentPrice=2503, capital=50, lastSL=2400, lastTP=2600;
-
-function log(m){ var el=document.getElementById('debug'); if(el) el.innerHTML=new Date().toLocaleTimeString()+' '+m; console.log(m); }
-
-function changeCoin(v){ curCoin=v; document.getElementById('coinTitle').textContent=curCoin+' 15m'; loadPrice(); loadTrades(); log('Coin '+v); }
-
+var curCoin='ETH', lev=10, currentPrice=2503, capital=50;
 function setLeva(l){
   lev=l;
-  var btns=document.querySelectorAll('.lev-btn');
-  for(var i=0;i<btns.length;i++){ btns[i].classList.remove('active'); }
-  // trova quello cliccato
-  var all=document.querySelectorAll('.lev-btn');
-  for(var i=0;i<all.length;i++){ if(all[i].textContent==l+'x'){ all[i].classList.add('active'); } }
   document.getElementById('levInfo').textContent=l+'x';
-  updateCalc();
-  log('Leva impostata '+l+'x - Ora clicca LONG/SHORT');
+  var btns=document.querySelectorAll('.lev-btn');
+  for(var i=0;i<btns.length;i++){ btns[i].classList.remove('active'); if(btns[i].textContent==l+'x') btns[i].classList.add('active'); }
+  document.getElementById('calc').textContent=capital+' EUR x '+l+'x = '+(capital*l)+' EUR - Leva cambiata OK - Ora LONG/SHORT';
+  document.getElementById('debug').textContent='Leva '+l+'x impostata - Click funziona!';
 }
-
-function updateCalc(){
+async function doTrade(side){
   try{
     var capEl=document.getElementById('capInput');
     if(capEl) capital=parseFloat(capEl.value)||50;
-    if(!currentPrice) currentPrice=2503;
-    var longLiq=currentPrice*(1-0.8/lev);
-    var shortLiq=currentPrice*(1+0.8/lev);
-    var pos=capital*lev;
-    document.getElementById('calc').innerHTML='<b style=color:#22c55e>'+capital+' EUR x '+lev+'x = '+pos+' EUR</b><br>Entry ~'+currentPrice.toFixed(2)+' | Liq LONG '+longLiq.toFixed(2)+' SHORT '+shortLiq.toFixed(2)+'<br>SL '+(lastSL?lastSL.toFixed(2):'--')+' TP '+(lastTP?lastTP.toFixed(2):'--')+' - <span style=color:#22c55e>PRONTO</span>';
-  }catch(e){ log('calc err '+e.message); }
-}
-
-async function loadPrice(){
-  try{
-    log('Carico prezzo '+curCoin);
-    var r=await fetch('/api/signals?tf=15m');
-    var j=await r.json();
-    if(j.ok && j.coins && j.coins[curCoin]){
-      var info=j.coins[curCoin];
-      currentPrice=info.price;
-      lastSL=info.sl; lastTP=info.tp;
-      document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+info.signal;
-      document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+' '+info.trend+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' | SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'%</span>';
-      updateCalc();
-      log('Prezzo V71 '+currentPrice);
-    }else{
-      log('Signals vuoto, uso 2503');
-      currentPrice=curCoin=='BTC'?75000:2503;
-      updateCalc();
-    }
-  }catch(e){
-    log('Offline, uso fallback '+e.message);
-    currentPrice=curCoin=='BTC'?75000:2503;
-    updateCalc();
-  }
-}
-
-async function doTrade(side){
-  try{
-    var p=currentPrice||2503;
-    log('CLICK '+side+' prezzo='+p+' leva='+lev+' - INVIO IN CORSO...');
-    var payload={coin:curCoin, side:side, entry:p, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
+    document.getElementById('debug').textContent='Invio '+side+' '+curCoin+' '+currentPrice+' leva '+lev+'...';
+    var payload={coin:curCoin, side:side, entry:currentPrice, leverage:lev, capital:capital, sl:2400, tp:2600};
     var r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     var txt=await r.text();
-    log('Risposta: '+txt.substring(0,200));
+    document.getElementById('debug').textContent='Risposta: '+txt.substring(0,150);
     var j=JSON.parse(txt);
     if(j.ok){
-      alert('✅ '+side+' '+curCoin+' SALVATO!
-Entry '+p.toFixed(2)+' leva '+lev+'x
-Guarda sotto in I MIEI TRADE');
+      alert('✅ '+side+' SALVATO! ID '+j.trade.id+' Entry '+j.trade.entry);
       loadTrades();
     }else{
-      alert('❌ Errore server: '+(j.error||txt));
+      alert('❌ Errore: '+j.error);
     }
   }catch(e){
-    alert('❌ Errore: '+e.message);
-    log('Errore trade '+e.message);
+    alert('❌ Errore fetch: '+e.message);
+    document.getElementById('debug').textContent='Errore: '+e.message;
   }
 }
-
 async function loadTrades(){
   try{
     var r=await fetch('/api/my_trades');
     var j=await r.json();
     var list=document.getElementById('myTradesList');
-    if(!j.trades || j.trades.length==0){
-      list.innerHTML='<div style=text-align:center;color:#64748b;padding:20px>Nessun trade<br>Clicca LONG o SHORT sotto</div>';
-      return;
-    }
+    if(!j.trades || j.trades.length==0){ list.innerHTML='Nessun trade'; return; }
     var html='';
     for(var i=j.trades.length-1;i>=0;i--){
       var t=j.trades[i];
-      var col=t.pnl_eur>=0?'#22c55e':'#ef4444';
-      html+='<div style=display:flex;justify-content:space-between;background:#020617;padding:10px;margin:4px 0;border-radius:8px;border-left:3px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x '+t.capital+'EUR<br><span style=font-size:10px;color:#94a3b8>Entry '+t.entry.toFixed(2)+' Ora '+(t.current_price?t.current_price.toFixed(2):'--')+' '+t.status+'</span></div><div style=text-align:right;color:'+col+';font-weight:800>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR ('+t.pnl_pct+'%)<br>'+(t.status=='APERTO'?'<button onclick=closeTrade('+t.id+') style=padding:4px 8px;border-radius:12px;background:#f59e0b;border:none;font-size:10px>CHIUDI</button>':t.status)+'</div></div>';
+      html+='<div style=background:#020617;padding:10px;margin:4px 0;border-radius:8px;border-left:3px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x '+t.capital+'EUR Entry '+t.entry.toFixed(2)+' <span style=float:right;color:'+(t.pnl_eur>=0?'#22c55e':'#ef4444')+'>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR</span><br><span style=font-size:10px;color:#94a3b8>'+t.status+' '+t.time.slice(11,19)+'</span> '+(t.status=='APERTO'?'<button onclick=closeTrade('+t.id+') style=padding:4px 8px;border-radius:12px;background:#f59e0b;border:none>CHIUDI</button>':'')+'</div>';
     }
     list.innerHTML=html;
-    log('Trades '+j.trades.length);
-  }catch(e){ log('Err loadTrades '+e.message); }
+  }catch(e){ document.getElementById('myTradesList').textContent='Errore: '+e.message; }
 }
-
 async function closeTrade(id){
   if(!confirm('Chiudere #'+id+'?')) return;
   try{
     var r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
     var j=await r.json();
-    if(j.ok){ alert('Chiuso PnL '+j.trade.pnl_eur); loadTrades(); }
+    if(j.ok){ alert('Chiuso '+j.trade.pnl_eur); loadTrades(); }
   }catch(e){ alert(e.message); }
 }
-
-// Init immediato
-setLeva(10);
-updateCalc();
-loadPrice();
-loadTrades();
-log('V80 CLICK 100% caricato - Prova leva e LONG/SHORT');
+// Nessuna chiamata API all'avvio - solo log
+document.getElementById('debug').textContent='V81 TEST CLICK caricato - Tocca leva o LONG/SHORT per vedere ALERT';
 </script>
 </body></html>
     """
