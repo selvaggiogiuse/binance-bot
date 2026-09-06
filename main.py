@@ -968,19 +968,31 @@ async function setLev(l){
 
 function updateCalc(){
   capital=parseFloat(document.getElementById('capInput').value)||50;
-  if(!currentPrice) currentPrice=2400;
+  if(!currentPrice || currentPrice<=0) currentPrice = curCoin=='BTC' ? 75000 : curCoin=='ETH' ? 2498 : 2600;
   let p=currentPrice;
   let longLiq=p*(1-0.8/lev);
   let shortLiq=p*(1+0.8/lev);
   let pos=capital*lev;
-  document.getElementById('calc').innerHTML=
-    `Capitale <b>${capital} EUR</b> x ${lev}x = <b>${pos.toFixed(2)} EUR</b><br>`+
-    `Entry ~${p.toFixed(2)} | Liq LONG ${longLiq.toFixed(2)} | Liq SHORT ${shortLiq.toFixed(2)}<br>`+
-    `SL ${lastSL?lastSL.toFixed(2):'--'} TP ${lastTP?lastTP.toFixed(2):'--'}`;
+  let el=document.getElementById('calc');
+  if(el){
+    el.innerHTML=
+      `Capitale <b>${capital} EUR</b> x ${lev}x = <b>${pos.toFixed(2)} EUR</b><br>`+
+      `Entry ~${p.toFixed(2)} | Liq LONG ${longLiq.toFixed(2)} | Liq SHORT ${shortLiq.toFixed(2)}<br>`+
+      `SL ${lastSL?lastSL.toFixed(2):'--'} TP ${lastTP?lastTP.toFixed(2):'--'}<br><span style="font-size:10px;color:#22c55e">Pronto per LONG/SHORT</span>`;
+  }
 }
 
 async function openTrade(side){
   let p=currentPrice||0;
+  if(p<=0){
+    // fallback se /api/ohlc non risponde - prendi prezzo da cache o default
+    try{
+      let rp=await fetch(`/api/signals?tf=15m`);
+      let jp=await rp.json();
+      if(jp.coins && jp.coins[curCoin]) p=jp.coins[curCoin].price;
+    }catch(e){}
+  }
+  if(p<=0) p = curCoin=='BTC' ? 75000 : curCoin=='ETH' ? 2500 : 2600;
   capital=parseFloat(document.getElementById('capInput').value)||50;
   let payload={coin:curCoin, side:side, entry:p, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
   try{
