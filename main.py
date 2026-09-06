@@ -16,7 +16,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 TELEGRAM_MIN_CONF = 82
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V74 RIEPILOGO + CSV - SENZA NOTIFICHE"
+VERSION = "V75 CHART FIX - RIEPILOGO + CSV"
 COOLDOWN = 900
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -828,7 +828,7 @@ def api_my_trades_close():
 def trading_page():
     html2 = """
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>V74 Riepilogo + CSV</title>
+<title>V75 Chart Fix</title>
 <style>
 *{box-sizing:border-box;font-family:Inter,sans-serif}body{margin:0;background:#020617;color:#e2e8f0}
 .header{padding:12px 16px;background:#020617;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center}
@@ -847,9 +847,10 @@ def trading_page():
 .stats-box{display:flex;gap:8px;flex-wrap:wrap;background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:10px;margin:8px 12px;font-size:12px}
 .stat{flex:1;min-width:70px;text-align:center;background:#020617;border-radius:8px;padding:8px;border:1px solid #1e293b}
 .stat b{font-size:14px;display:block}
+#tradingview_chart{height:460px;width:100%;border:none;background:#020617}
 </style></head><body>
-<div class="header"><div><b>V74 RIEPILOGO</b> <span style="font-size:10px;color:#22c55e">Senza notifiche extra</span><div style="font-size:10px;color:#94a3b8">TradingView + Leva + PnL Totale + CSV</div></div><div><a href="/app" style="color:#22c55e;font-size:12px;text-decoration:none">Torna a V71</a></div></div>
-<div class="info">Telegram resta su /app come sempre. Qui vedi riepilogo e puoi esportare i trade. Notifiche extra disattivate come chiesto.</div>
+<div class="header"><div><b>V75 CHART FIX</b> <span style="font-size:10px;color:#22c55e">Grafico sempre visibile</span><div style="font-size:10px;color:#94a3b8">TradingView iframe + Leva + PnL + CSV</div></div><div><a href="/app" style="color:#22c55e;font-size:12px;text-decoration:none">Torna a V71</a></div></div>
+<div class="info">Fix grafico nero: ora uso iframe TradingView ufficiale che non si blocca. Telegram su /app identico, senza notifiche extra come chiesto.</div>
 
 <div class="tv-wrap">
 <div class="tv-header">
@@ -859,7 +860,7 @@ def trading_page():
 <select id="tfSel" onchange="changeTF()" style="padding:6px 10px;border-radius:20px;background:#020617;color:white;border:1px solid #334155"><option value="5">5m</option><option value="15" selected>15m</option><option value="60">1H</option><option value="240">4H</option></select>
 </div>
 </div>
-<div id="tradingview_chart" style="height:420px;width:100%"></div>
+<iframe id="tradingview_chart" src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=BINANCE%3AETHUSDT&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&studies=%5B%22MASimple%4050%22%2C%22MAExp%4050%22%2C%22MAExp%40150%22%5D&theme=dark&style=1&timezone=Europe%2FRome&withdateranges=1&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=it&utm_source=&utm_medium=widget&utm_campaign=chart&utm_term=BINANCE%3AETHUSDT"></iframe>
 <div class="lev-panel">
 <div style="width:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
 <div style="font-size:12px;font-weight:800;color:#86efac">CAPITALE:</div>
@@ -896,41 +897,26 @@ def trading_page():
 <div id="myTradesList" style="max-height:500px;overflow:auto;background:#020617">Carico...</div>
 </div>
 
-<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
 let curCoin='ETH', curTF='15', lev=10, currentPrice=0, capital=50;
-let tvWidget=null, lastTP=0, lastSL=0;
+let lastTP=0, lastSL=0;
 let lastTradesData=[];
 
-function getSymbol(coin){
+function getTVSymbol(coin){
   if(coin=='BTC') return 'BINANCE:BTCUSDT';
   if(coin=='ETH') return 'BINANCE:ETHUSDT';
   if(coin=='ORO') return 'BINANCE:PAXGUSDT';
-  return 'BINANCE:BTCUSDT';
+  return 'BINANCE:ETHUSDT';
 }
 
 function loadTV(){
-  const symbol=getSymbol(curCoin);
+  const sym=getTVSymbol(curCoin);
+  const tvSym=sym.replace(':','%3A');
   document.getElementById('tvTitle').textContent=curCoin+'USDT '+curTF+'m';
-  if(tvWidget) { try{tvWidget.remove();}catch(e){} }
-  document.getElementById('tradingview_chart').innerHTML='';
-  tvWidget = new TradingView.widget({
-    "autosize": true,
-    "symbol": symbol,
-    "interval": curTF,
-    "timezone": "Europe/Rome",
-    "theme": "dark",
-    "style": "1",
-    "locale": "it",
-    "toolbar_bg": "#0f172a",
-    "enable_publishing": false,
-    "withdateranges": true,
-    "hide_side_toolbar": false,
-    "allow_symbol_change": true,
-    "details": true,
-    "studies": ["EMA@tv-basicstudies", "EMA@tv-basicstudies", "EMA@tv-basicstudies"],
-    "container_id": "tradingview_chart"
-  });
+  let interval=curTF;
+  // iframe src con simbolo e timeframe
+  let src=`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${tvSym}&interval=${interval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&studies=%5B%22MASimple%4050%22%2C%22MAExp%4050%22%2C%22MAExp%40150%22%5D&theme=dark&style=1&timezone=Europe%2FRome&withdateranges=1&locale=it`;
+  document.getElementById('tradingview_chart').src=src;
   fetchEMA();
 }
 
@@ -954,8 +940,13 @@ async function fetchEMA(){
         lastTP=j2.coins[curCoin].tp;
       }
       updateCalc();
+    } else {
+      document.getElementById('emaInfo').textContent='EMA in caricamento...';
     }
-  }catch(e){console.log('EMA fetch error',e)}
+  }catch(e){
+    console.log('EMA fetch error',e);
+    document.getElementById('emaInfo').textContent='EMA offline - grafico ok';
+  }
 }
 
 function changeCoin(){curCoin=document.getElementById('coinSel').value;loadTV();loadMyTrades();}
@@ -964,7 +955,8 @@ function changeTF(){curTF=document.getElementById('tfSel').value;loadTV();}
 async function setLev(l){
   lev=l;
   document.querySelectorAll('.lev-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelector(`[data-lev="${l}"]`).classList.add('active');
+  let btn=document.querySelector(`[data-lev="${l}"]`);
+  if(btn) btn.classList.add('active');
   try{
     await fetch('/api/leverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({leverage:l})});
     let r=await fetch('/api/leverage');
@@ -1008,7 +1000,6 @@ async function loadMyTrades(){
     let r=await fetch('/api/my_trades');
     let j=await r.json();
     lastTradesData=j.trades||[];
-    // stats
     if(j.stats){
       document.getElementById('sPnl').textContent=(j.stats.pnl_tot>=0?'+':'')+j.stats.pnl_tot+' EUR';
       document.getElementById('sPnl').style.color=j.stats.pnl_tot>=0?'#22c55e':'#ef4444';
@@ -1058,7 +1049,7 @@ function exportCSV(){
   });
   let blob=new Blob([csv],{type:'text/csv'});
   let url=URL.createObjectURL(blob);
-  let a=document.createElement('a');a.href=url;a.download='my_trades_V74.csv';a.click();
+  let a=document.createElement('a');a.href=url;a.download='my_trades_V75.csv';a.click();
 }
 
 loadTV();setLev(10);loadMyTrades();
