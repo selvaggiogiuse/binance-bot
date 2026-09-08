@@ -14,20 +14,20 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 82
+TELEGRAM_MIN_CONF = 88
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V83 CON GRAFICO - TASTI OK"
-COOLDOWN = 900
+VERSION = "V87 ULTRA PRECISION - MENO ERRORI - 88%+ BOS FORTE" 
+COOLDOWN = 1800
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
-STABLE_SECONDS = 300
+STABLE_SECONDS = 600
 TRADE_HISTORY = []
 RISK_CONFIG = {"mode": "DEMO", "capital": 1000.0, "risk_pct": 1.0, "max_trades_day": 3, "max_losses_row": 2, "daily_trades": 0, "daily_losses_row": 0, "last_day": str(date.today()), "equity": 1000.0, "peak": 1000.0, "drawdown": 0.0}
 LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
 USER_TRADES = []
 TRADE_ID_COUNTER = 1
-ADAPTIVE_CONF = 82
+ADAPTIVE_CONF = 88
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -346,6 +346,64 @@ V71: Solo BOS + V67 (EMA 9/21/50 + RSI + VOL + 1H) - NO 12 metodi"""
         return {"ok":False,"error":r.text[:300]}
     except Exception as e: return {"ok":False,"error":str(e)}
 
+def send_liquidation_alert(trade, current_price, liq_price, dist_to_liq):
+    if not TELEGRAM_ENABLED:
+        return {"ok":False}
+    key = f"liq_{trade['id']}"
+    now = time.time()
+    last = LAST_TELEGRAM.get(key, 0)
+    if now - last < 600:
+        return {"ok":False}
+    coin = trade["coin"]
+    side = trade["side"]
+    lev = trade.get("leverage",10)
+    cap = trade.get("capital",50)
+    entry = trade["entry"]
+    pnl_eur = trade.get("pnl_eur",0)
+    emoji = "🔴" if dist_to_liq < 5 else "🟠" if dist_to_liq < 10 else "🟡"
+    text = f"""{emoji} *ALLARME LIQ {coin} {side} {lev}x* {emoji}
+
+Entry: ${entry:.2f} | Ora: ${current_price:.2f} | Liq: ${liq_price:.2f}
+Dist: {dist_to_liq:.1f}% | PnL: {pnl_eur:.2f}€
+ID: {trade['id']}
+
+⚠️ Chiudi o riduci leva!
+
+⏰ {rome_now().strftime('%H:%M:%S')}"""
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=5)
+        if r.status_code==200:
+            LAST_TELEGRAM[key]=now
+            return {"ok":True}
+        return {"ok":False}
+    except Exception as e:
+        return {"ok":False, "error":str(e)}
+
+def check_user_trades_liquidation():
+    if not TELEGRAM_ENABLED or not USER_TRADES:
+        return
+    for t in USER_TRADES:
+        if t.get("status")!="APERTO":
+            continue
+        try:
+            gp = get_price(t["coin"])
+            price = float(gp[0]) if isinstance(gp,(list,tuple)) else float(gp) if isinstance(gp,(int,float)) else t["entry"]
+        except:
+            price = t["entry"]
+        entry = t["entry"]
+        lev = t.get("leverage",10)
+        side = t.get("side","LONG")
+        if side=="LONG":
+            liq = entry * (1 - 0.8/lev) if lev>0 else entry*0.9
+            dist = (price - liq) / (entry - liq) * 100 if entry!=liq else 0
+        else:
+            liq = entry * (1 + 0.8/lev) if lev>0 else entry*1.1
+            dist = (liq - price) / (liq - entry) * 100 if liq!=entry else 0
+        if dist < 15:
+            send_liquidation_alert(t, price, liq, dist)
+
+
+
 def analyze(name, tf, do_tg=False, force_tg=False):
     global LAST_ENTRA
     try:
@@ -370,27 +428,54 @@ def analyze(name, tf, do_tg=False, force_tg=False):
         for k,v in methods.items():
             if v["signal"]=="COMPRA": compra_score+=v["score"]
             elif v["signal"]=="VENDI": vendi_score+=v["score"]
-        # FILTRO STRICT: serve BOS + EMA allineata + RSI ok + VOL ok
+        # V87 ULTRA PRECISION - SOLO SEGNALI PERFETTI per non sbagliare
         bos_signal = methods.get("BOS",{}).get("signal")
         ema_signal = methods.get("EMA",{}).get("signal")
-        # Se BOS e EMA non concordano -> NO TRADE
+        h1_signal = methods.get("1H",{}).get("signal") if "1H" in methods else None
+        rsi_val = rsi  # rsi già calcolato
+        bos_type = methods.get("BOS",{}).get("type","")
+        bos_bonus = methods.get("BOS",{}).get("bonus",0)
+        # FILTRO 1: BOS+EMA obbligatori e concordi
         if bos_signal=="ASPETTA" or ema_signal=="ASPETTA":
-            signal="ASPETTA"; conf=30; extra="BOS o EMA mancante - NO TRADE per migliorare WR"
-            color="wait"; label=f"ASPETTA NO BOS/EMA"
+            signal="ASPETTA"; conf=25; extra="❌ V87: NO BOS/EMA - skip per precisione"
+            color="wait"; label=f"ASPETTA NO BOS/EMA V87"
         elif bos_signal != ema_signal:
-            # Conflitto BOS vs EMA = aspetta, era causa di LOSS in V70.2
-            signal="ASPETTA"; conf=40; extra=f"Conflitto BOS {bos_signal} vs EMA {ema_signal} - NO TRADE - era causa LOSS V70.2"
-            color="wait"; label=f"CONFLITTO {bos_signal} vs {ema_signal}"
-        elif compra_score > vendi_score and compra_score >= 60:
+            signal="ASPETTA"; conf=30; extra=f"❌ V87: Conflitto BOS {bos_signal} vs EMA {ema_signal} - causa LOSS"
+            color="wait"; label=f"CONFLITTO V87"
+        # FILTRO 2: BOS deve essere FORTE (solo HH+HL o LH+LL bonus 40)
+        elif bos_bonus < 35:
+            signal="ASPETTA"; conf=35; extra=f"❌ V87: BOS debole {bos_type} bonus {bos_bonus} - vuole solo HH+HL/LH+LL forte"
+            color="wait"; label=f"BOS DEBOLE V87"
+        # FILTRO 3: HTF 1H deve allinearsi (se c'è)
+        elif h1_signal and h1_signal!="ASPETTA" and h1_signal != bos_signal:
+            signal="ASPETTA"; conf=40; extra=f"❌ V87: HTF 1H {h1_signal} vs {bos_signal} - disallineato, no trade"
+            color="wait"; label=f"HTF NO V87"
+        # FILTRO 4: RSI non estremo (evita top/bottom)
+        elif bos_signal=="COMPRA" and rsi_val > 68:
+            signal="ASPETTA"; conf=40; extra=f"❌ V87: RSI {rsi_val:.0f} ipercomprato >68 - evita COMPRA"
+            color="wait"; label=f"RSI OVERBOUGHT V87"
+        elif bos_signal=="VENDI" and rsi_val < 32:
+            signal="ASPETTA"; conf=40; extra=f"❌ V87: RSI {rsi_val:.0f} ipervenduto <32 - evita VENDI"
+            color="wait"; label=f"RSI OVERSOLD V87"
+        # FILTRO 5: RSI deve essere in zona buona (40-68 per COMPRA, 32-60 per VENDI)
+        elif bos_signal=="COMPRA" and not (42 <= rsi_val <= 68):
+            signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona COMPRA 42-68"
+            color="wait"; label=f"RSI NO ZONA V87"
+        elif bos_signal=="VENDI" and not (32 <= rsi_val <= 58):
+            signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona VENDI 32-58"
+            color="wait"; label=f"RSI NO ZONA V87"
+        # FILTRO 6: Score alto e diff alta
+        elif compra_score > vendi_score and compra_score >= 80 and (compra_score - vendi_score) >= 25:
             signal="COMPRA"; conf=50+compra_score; diff=compra_score-vendi_score
-            conf = max(15, min(92, 50 + compra_score + diff))
-        elif vendi_score > compra_score and vendi_score >= 60:
+            conf = max(20, min(96, 58 + compra_score + diff))
+        elif vendi_score > compra_score and vendi_score >= 80 and (vendi_score - compra_score) >= 25:
             signal="VENDI"; conf=50+vendi_score; diff=vendi_score-compra_score
-            conf = max(15, min(92, 50 + vendi_score + diff))
+            conf = max(20, min(96, 58 + vendi_score + diff))
         else:
-            signal="ASPETTA"; conf=max(compra_score,vendi_score); extra="Punteggio basso - NO TRADE"
-            color="wait"; label=f"ASPETTA BULL{compra_score} BEAR{vendi_score}"
+            signal="ASPETTA"; conf=max(compra_score,vendi_score); extra=f"❌ V87: Score basso o diff bassa BULL{compra_score} BEAR{vendi_score} - vuole >=80 e diff>=25"
+            color="wait"; label=f"ASPETTA SCORE V87"
             signal="ASPETTA"
+        
         # Se non abbiamo già settato extra per i casi sopra, calcoliamo normale
         if 'extra' not in locals() or "NO TRADE" not in extra:
             sl_pct = max(0.5, min(1.0, atr_pct*1.8))
@@ -409,9 +494,12 @@ def analyze(name, tf, do_tg=False, force_tg=False):
                 extra+=f" • ⚠️ {regime_msg}"
                 conf=max(15,conf-20)
             min_conf=adaptive
-            vol_ok = 1.0 <= vol_ratio <= 5.0
+            vol_ok = 1.5 <= vol_ratio <= 3.5
+            atr_ok = 0.4 <= atr_pct <= 2.2
+            hour = rome_hour()
+            time_ok = not (1 <= hour <= 5)  # evita 01-05 notte poco volume
             # V71 STRICT: solo se BOS+EMA concordi + VOL ok + regime ok + conf >= adapt
-            if conf>=min_conf and vol_ok and signal!="ASPETTA" and bos_signal==ema_signal and (regime_ok or not is_real_mode):
+            if conf>=min_conf and vol_ok and atr_ok and time_ok and signal!="ASPETTA" and bos_signal==ema_signal and (regime_ok or not is_real_mode):
                 color="entra"; label=f"ENTRA {signal} B{compra_score} vs B{vendi_score} - V71 HIGH WR"
             elif conf>=70:
                 color="quasi"; label=f"QUASI {methods.get('BOS',{}).get('type','')}"
@@ -741,7 +829,6 @@ def api_bybit_close():
 def api_my_trades():
     global USER_TRADES, TRADE_ID_COUNTER
     if request.method=="GET":
-        # aggiorna PnL in tempo reale per ogni trade aperto
         out=[]
         pnl_tot=0
         wins=0
@@ -749,39 +836,47 @@ def api_my_trades():
         aperti=0
         chiusi=0
         for t in USER_TRADES:
-            try:
-                gp = get_price(t["coin"])
-                if isinstance(gp, (list, tuple)):
-                    price = float(gp[0]) if gp[0] else t["entry"]
-                elif isinstance(gp, (int, float)):
-                    price = float(gp)
-                else:
-                    price = t["entry"]
-            except Exception as e:
-                print(f"get_price error {e}")
-                price = t["entry"]
-            entry=t["entry"]
-            lev=t.get("leverage",10)
-            cap=t.get("capital",50)
-            side=t.get("side","LONG")
-            if side=="LONG":
-                pnl_pct=(price-entry)/entry*100*lev
-            else:
-                pnl_pct=(entry-price)/entry*100*lev
-            pnl_eur=cap*pnl_pct/100
-            t_copy=dict(t)
-            t_copy["current_price"]=price
-            t_copy["pnl_pct"]=round(pnl_pct,2)
-            t_copy["pnl_eur"]=round(pnl_eur,2)
-            out.append(t_copy)
-            # stats
             if t.get("status")=="APERTO":
+                try:
+                    gp = get_price(t["coin"])
+                    if isinstance(gp, (list, tuple)):
+                        price = float(gp[0]) if gp[0] else t["entry"]
+                    elif isinstance(gp, (int, float)):
+                        price = float(gp)
+                    else:
+                        price = t["entry"]
+                except:
+                    price = t["entry"]
+                entry=t["entry"]
+                lev=t.get("leverage",10)
+                cap=t.get("capital",50)
+                side=t.get("side","LONG")
+                if side=="LONG":
+                    pnl_pct=(price-entry)/entry*100*lev
+                    liq = entry * (1 - 0.8/lev) if lev>0 else entry*0.9
+                    dist = (price - liq) / (entry - liq) * 100 if entry!=liq else 0
+                else:
+                    pnl_pct=(entry-price)/entry*100*lev
+                    liq = entry * (1 + 0.8/lev) if lev>0 else entry*1.1
+                    dist = (liq - price) / (liq - entry) * 100 if liq!=entry else 0
+                pnl_eur=cap*pnl_pct/100
+                t_copy=dict(t)
+                t_copy["current_price"]=price
+                t_copy["pnl_pct"]=round(pnl_pct,2)
+                t_copy["pnl_eur"]=round(pnl_eur,2)
+                t_copy["liq_price"]=round(liq,2)
+                t_copy["dist_to_liq"]=round(dist,1)
+                t_copy["liq_danger"]=dist < 20
+                out.append(t_copy)
                 aperti+=1
                 pnl_tot+=pnl_eur
             else:
+                t_copy=dict(t)
+                t_copy["current_price"]=t_copy.get("close_price", t_copy.get("entry"))
+                out.append(t_copy)
                 chiusi+=1
-                pnl_tot+=t.get("pnl_eur",0)
-                if t.get("pnl_eur",0)>=0:
+                pnl_tot+=t_copy.get("pnl_eur",0)
+                if t_copy.get("pnl_eur",0)>=0:
                     wins+=1
                 else:
                     losses+=1
@@ -863,29 +958,29 @@ def api_my_trades_close():
 @app.route("/trading")
 def trading_page():
     html2 = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V85 FIX CHIUSI CONGELATI</title>
-<style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none;background:#020617}</style>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V87 ULTRA PRECISION + FIX CHIUSI</title>
+<style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V85 FIX CHIUSI</b> <span style="color:#22c55e">Chiusi congelati + Liq TG</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Fix: CHIUSO non si aggiorna più + Allarme liq su Telegram</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V87 ULTRA PRECISION</b> <span style="color:#22c55e">Meno errori - 88%+ BOS forte</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
 
 <div style="margin:8px;display:flex;gap:8px">
-<button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800;font-size:14px">📈 Mostra Grafico</button>
-<button onclick="loadPrice()" style="padding:12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800;font-size:14px">🔄 Prezzo</button>
+<button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800">📈 Grafico</button>
+<button onclick="loadPrice()" style="padding:12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800">🔄 V71</button>
 </div>
 
 <div class="tv-wrap" id="tvWrap">
-<div style="display:flex;justify-content:space-between;padding:8px;background:#020617;border-bottom:1px solid #1e293b"><b id="tvLabel">ETHUSDT 15m</b><button onclick="toggleChart()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155;font-size:11px">Chiudi X</button></div>
+<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #1e293b"><b id="tvLabel">ETHUSDT 15m</b><button onclick="toggleChart()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155">Chiudi X</button></div>
 <iframe id="tvChart" src="https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol=BINANCE%3AETHUSDT&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it"></iframe>
 </div>
 
 <div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center"><b id="coinTitle" style="font-size:18px">ETH 15m</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px 14px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;font-size:16px;font-weight:800"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
-<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $ - TOCCA</div>
-<div id="info" style="text-align:center;font-size:13px;color:#cbd5e1;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">Carico...</div>
+<div style="display:flex;justify-content:space-between;align-items:center"><b id="coinTitle">ETH 15m</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px 14px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;font-weight:800"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
+<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $</div>
+<div id="info" style="text-align:center;font-size:13px;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">Carico V87...</div>
 </div>
 
 <div class="card">
-<div>CAPITALE: <input id="capInput" type="number" value="50" oninput="updateCalc()" style="padding:10px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;width:100px;text-align:center;font-weight:800;font-size:18px"> EUR - LEVA: <span id="levInfo" style="font-weight:800;color:#22c55e;font-size:18px">10x</span></div>
+<div>CAPITALE: <input id="capInput" type="number" value="50" oninput="updateCalc()" style="padding:10px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;width:100px;text-align:center;font-weight:800"> EUR - LEVA: <span id="levInfo" style="font-weight:800;color:#22c55e">10x</span></div>
 <div style="margin-top:10px">
 <button class="lev-btn" onclick="setLeva(1)">1x</button>
 <button class="lev-btn" onclick="setLeva(3)">3x</button>
@@ -895,13 +990,13 @@ def trading_page():
 <button class="lev-btn" onclick="setLeva(50)">50x</button>
 <button class="lev-btn" onclick="setLeva(100)">100x</button>
 </div>
-<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e;font-size:13px">50 EUR x 10x = 500 EUR - PRONTO</div>
+<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e">50 EUR x 10x</div>
 <div id="liqBarWrap" style="margin-top:10px;background:#020617;border:1px solid #1e293b;border-radius:10px;padding:10px;display:none">
 <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:4px"><span id="liqLongLabel">Liq LONG --</span><span id="liqDistLabel">Safe --</span><span id="liqShortLabel">Liq SHORT --</span></div>
 <div style="background:#1e293b;border-radius:10px;height:14px;overflow:hidden;position:relative"><div id="liqBar" style="height:100%;width:50%;background:#22c55e;transition:width 0.5s"></div><div id="liqMarker" style="position:absolute;top:0;bottom:0;left:50%;width:3px;background:white"></div></div>
 <div id="liqAlert" style="margin-top:6px;font-size:11px;font-weight:800;text-align:center;display:none"></div>
 </div>
-<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V85 fix chiusi congelati + liq alert TG</div>
+<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V87 meno errori - 88%+ BOS forte + HTF + RSI zona</div>
 </div>
 
 <div class="card">
@@ -916,130 +1011,16 @@ def trading_page():
 
 <script>
 var curCoin='ETH', lev=10, currentPrice=2503, capital=50, lastSL=2400, lastTP=2600, chartVisible=false;
-
-function toggleChart(){
-  var wrap=document.getElementById('tvWrap');
-  var btn=document.getElementById('btnToggleChart');
-  chartVisible=!chartVisible;
-  if(chartVisible){ wrap.classList.add('show'); btn.textContent='📉 Nascondi Grafico'; loadTV(); }
-  else{ wrap.classList.remove('show'); btn.textContent='📈 Mostra Grafico'; }
-}
-function loadTV(){
-  try{
-    var sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]||'BINANCE:ETHUSDT';
-    document.getElementById('tvChart').src='https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol='+sym.replace(':','%3A')+'&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it';
-    document.getElementById('tvLabel').textContent=curCoin+'USDT 15m';
-  }catch(e){}
-}
-function changeCoin(v){
-  curCoin=v;
-  var prices={BTC:75000, ETH:2503, ORO:2650};
-  currentPrice=prices[v]||2503;
-  document.getElementById('coinTitle').textContent=v+' 15m';
-  document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+v;
-  document.getElementById('debug').textContent='Coin '+v+' '+currentPrice;
-  updateCalc();
-  if(chartVisible) loadTV();
-  loadPrice();
-  loadTrades();
-}
-function setLeva(l){
-  lev=l;
-  document.getElementById('levInfo').textContent=l+'x';
-  var btns=document.querySelectorAll('.lev-btn');
-  for(var i=0;i<btns.length;i++){ btns[i].classList.remove('active'); if(btns[i].textContent==l+'x') btns[i].classList.add('active'); }
-  updateCalc();
-}
-function updateCalc(){
-  var capEl=document.getElementById('capInput');
-  if(capEl) capital=parseFloat(capEl.value)||50;
-  var longLiq=currentPrice*(1-0.8/lev);
-  var shortLiq=currentPrice*(1+0.8/lev);
-  var pos=capital*lev;
-  document.getElementById('calc').innerHTML='<b style=color:#22c55e>'+capital+' EUR x '+lev+'x = '+pos+' EUR | '+curCoin+'</b><br>Entry ~'+currentPrice.toFixed(2)+' | LONG liq '+longLiq.toFixed(2)+' SHORT '+shortLiq.toFixed(2)+'<br>SL '+(lastSL?lastSL.toFixed(2):'--')+' TP '+(lastTP?lastTP.toFixed(2):'--')+' - PRONTO';
-  try{
-    var wrap=document.getElementById('liqBarWrap');
-    if(wrap){ wrap.style.display='block';
-      document.getElementById('liqLongLabel').textContent='Liq LONG '+longLiq.toFixed(0);
-      document.getElementById('liqShortLabel').textContent='Liq SHORT '+shortLiq.toFixed(0);
-      var range=shortLiq-longLiq;
-      var posPct=range>0?((currentPrice-longLiq)/range*100):50;
-      posPct=Math.max(0,Math.min(100,posPct));
-      document.getElementById('liqMarker').style.left=posPct+'%';
-      var distLong=currentPrice-longLiq;
-      var distShort=shortLiq-currentPrice;
-      var distMin=Math.min(distLong,distShort);
-      var distPct=(distMin/(currentPrice*0.8/lev))*100;
-      if(isNaN(distPct)) distPct=100;
-      document.getElementById('liqDistLabel').textContent='Safe '+distPct.toFixed(0)+'%';
-      var bar=document.getElementById('liqBar');
-      bar.style.width=distPct+'%';
-      bar.style.background=distPct>50?'#22c55e':distPct>20?'#facc15':'#ef4444';
-      var alertEl=document.getElementById('liqAlert');
-      if(distPct<20){ alertEl.style.display='block'; alertEl.style.color='#ef4444'; alertEl.textContent='🔴 PERICOLO LIQ! '+distPct.toFixed(0)+'% - Rischio!'; }
-      else if(distPct<40){ alertEl.style.display='block'; alertEl.style.color='#facc15'; alertEl.textContent='🟡 Attenzione '+distPct.toFixed(0)+'% dalla liq'; }
-      else alertEl.style.display='none';
-    }
-  }catch(e){}
-}
-async function loadPrice(){
-  try{
-    var r=await fetch('/api/signals?tf=15m');
-    var j=await r.json();
-    if(j.ok && j.coins && j.coins[curCoin]){
-      var info=j.coins[curCoin];
-      currentPrice=info.price; lastSL=info.sl; lastTP=info.tp;
-      document.getElementById('coinTitle').textContent=curCoin+' 15m - '+info.signal;
-      document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+curCoin;
-      document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'%</span>';
-      updateCalc();
-    }
-  }catch(e){}
-}
-async function doTrade(side){
-  try{
-    var capEl=document.getElementById('capInput');
-    if(capEl) capital=parseFloat(capEl.value)||50;
-    var payload={coin:curCoin, side:side, entry:currentPrice, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
-    var r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    var j=await r.json();
-    if(j.ok){ alert('✅ '+side+' '+curCoin+' SALVATO!'); loadTrades(); }
-  }catch(e){ alert(e.message); }
-}
-async function loadTrades(){
-  try{
-    var r=await fetch('/api/my_trades');
-    var j=await r.json();
-    var list=document.getElementById('myTradesList');
-    if(!j.trades || j.trades.length==0){ list.innerHTML='Nessun trade'; return; }
-    var html='';
-    for(var i=j.trades.length-1;i>=0;i--){
-      var t=j.trades[i];
-      var col=t.pnl_eur>=0?'#22c55e':'#ef4444';
-      if(t.status=='CHIUSO'){
-        // CHIUSO CONGELATO - mostra Entry -> Close e PnL congelato
-        html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid #64748b;opacity:0.9><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Close '+ (t.close_price?t.close_price.toFixed(2):'--')+'<br><span style=color:#94a3b8>CHIUSO '+t.time.slice(11,19)+' → '+(t.close_time?t.close_time.slice(11,19):'')+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800;font-size:14px>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR<br><span style=font-size:11px>'+t.pnl_pct+'%</span></div><div style=font-size:10px;color:#64748b>CONGELATO</div></div></div></div>';
-      }else{
-        // APERTO LIVE
-        var liqTxt=t.liq_price?' Liq '+t.liq_price:'';
-        var distTxt=t.dist_to_liq!=null?' Safe '+t.dist_to_liq+'%':'';
-        var danger = t.liq_danger ? ' 🔴' : '';
-        html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x '+t.capital+'EUR'+danger+'<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Ora '+(t.current_price?t.current_price.toFixed(2):'--')+liqTxt+'<br><span style=color:#94a3b8>'+t.status+' '+distTxt+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR<br><span style=font-size:11px>'+t.pnl_pct+'%</span></div><button onclick=closeTrade('+t.id+') style=margin-top:4px;padding:6px 12px;border-radius:20px;background:#f59e0b;color:black;border:none;font-weight:800;font-size:11px>CHIUDI</button></div></div></div>';
-      }
-    }
-    list.innerHTML=html;
-    document.getElementById('debug').textContent='Trades caricati - Chiusi congelati OK';
-  }catch(e){ document.getElementById('debug').textContent='Err trades '+e.message; }
-}
-async function closeTrade(id){
-  if(!confirm('Chiudere #'+id+'? PnL verrà congelato!')) return;
-  try{
-    var r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
-    var j=await r.json();
-    if(j.ok){ alert('✅ CHIUSO! PnL congelato: '+j.trade.pnl_eur+'EUR a '+j.trade.close_price.toFixed(2)); loadTrades(); }
-  }catch(e){ alert(e.message); }
-}
-setLeva(10); updateCalc(); loadPrice(); loadTrades();
+function toggleChart(){var w=document.getElementById('tvWrap');var b=document.getElementById('btnToggleChart');chartVisible=!chartVisible;if(chartVisible){w.classList.add('show');b.textContent='📉 Nascondi';loadTV();}else{w.classList.remove('show');b.textContent='📈 Grafico';}}
+function loadTV(){try{var s={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin];document.getElementById('tvChart').src='https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol='+s.replace(':','%3A')+'&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it';document.getElementById('tvLabel').textContent=curCoin+'USDT 15m';}catch(e){}}
+function changeCoin(v){curCoin=v;var p={BTC:75000,ETH:2503,ORO:2650};currentPrice=p[v]||2503;document.getElementById('coinTitle').textContent=v+' 15m';document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+v;updateCalc();if(chartVisible)loadTV();loadPrice();loadTrades();}
+function setLeva(l){lev=l;document.getElementById('levInfo').textContent=l+'x';var b=document.querySelectorAll('.lev-btn');for(var i=0;i<b.length;i++){b[i].classList.remove('active');if(b[i].textContent==l+'x')b[i].classList.add('active');}updateCalc();}
+function updateCalc(){var c=document.getElementById('capInput');if(c)capital=parseFloat(c.value)||50;var ll=currentPrice*(1-0.8/lev);var sl=currentPrice*(1+0.8/lev);var pos=capital*lev;document.getElementById('calc').innerHTML='<b style=color:#22c55e>'+capital+' EUR x '+lev+'x = '+pos+' EUR | '+curCoin+'</b><br>Entry ~'+currentPrice.toFixed(2)+' | LONG liq '+ll.toFixed(2)+' SHORT '+sl.toFixed(2)+'<br>SL '+(lastSL?lastSL.toFixed(2):'--')+' TP '+(lastTP?lastTP.toFixed(2):'--');try{var w=document.getElementById('liqBarWrap');if(w){w.style.display='block';document.getElementById('liqLongLabel').textContent='Liq LONG '+ll.toFixed(0);document.getElementById('liqShortLabel').textContent='Liq SHORT '+sl.toFixed(0);var range=sl-ll;var posPct=range>0?((currentPrice-ll)/range*100):50;posPct=Math.max(0,Math.min(100,posPct));document.getElementById('liqMarker').style.left=posPct+'%';var dMin=Math.min(currentPrice-ll,sl-currentPrice);var dPct=(dMin/(currentPrice*0.8/lev))*100;if(isNaN(dPct))dPct=100;document.getElementById('liqDistLabel').textContent='Safe '+dPct.toFixed(0)+'%';var bar=document.getElementById('liqBar');bar.style.width=dPct+'%';bar.style.background=dPct>50?'#22c55e':dPct>20?'#facc15':'#ef4444';var a=document.getElementById('liqAlert');if(dPct<20){a.style.display='block';a.style.color='#ef4444';a.textContent='🔴 PERICOLO LIQ '+dPct.toFixed(0)+'%';}else if(dPct<40){a.style.display='block';a.style.color='#facc15';a.textContent='🟡 Attenzione '+dPct.toFixed(0)+'%';}else a.style.display='none';}}catch(e){}}
+async function loadPrice(){try{var r=await fetch('/api/signals?tf=15m');var j=await r.json();if(j.ok&&j.coins&&j.coins[curCoin]){var info=j.coins[curCoin];currentPrice=info.price;lastSL=info.sl;lastTP=info.tp;document.getElementById('coinTitle').textContent=curCoin+' 15m - '+info.signal;document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+curCoin+' '+info.signal+' '+info.conf+'%';document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'% V87</span><br><span style=font-size:11px;color:#94a3b8>'+info.extra.substring(0,150)+'</span>';updateCalc();}}catch(e){}}
+async function doTrade(side){try{var c=document.getElementById('capInput');if(c)capital=parseFloat(c.value)||50;var p={coin:curCoin,side:side,entry:currentPrice,leverage:lev,capital:capital,sl:lastSL,tp:lastTP};var r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});var j=await r.json();if(j.ok){alert('✅ '+side+' '+curCoin+' SALVATO!');loadTrades();}}catch(e){alert(e.message);}}
+async function loadTrades(){try{var r=await fetch('/api/my_trades');var j=await r.json();var list=document.getElementById('myTradesList');if(!j.trades||j.trades.length==0){list.innerHTML='Nessun trade';return;}var html='';for(var i=j.trades.length-1;i>=0;i--){var t=j.trades[i];var col=t.pnl_eur>=0?'#22c55e':'#ef4444';if(t.status=='CHIUSO'){html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid #64748b;opacity:0.9><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Close '+(t.close_price?t.close_price.toFixed(2):'--')+'<br><span style=color:#94a3b8>CHIUSO '+(t.close_time?t.close_time.slice(11,19):'')+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR</div><div style=font-size:10px;color:#64748b>CONGELATO</div></div></div></div>';}else{var liqTxt=t.liq_price?' Liq '+t.liq_price:'';var distTxt=t.dist_to_liq!=null?' Safe '+t.dist_to_liq+'%':'';html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Ora '+(t.current_price?t.current_price.toFixed(2):'--')+liqTxt+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR</div><button onclick=closeTrade('+t.id+') style=margin-top:4px;padding:6px 12px;border-radius:20px;background:#f59e0b;border:none;font-weight:800>CHIUDI</button></div></div></div>';}}list.innerHTML=html;}catch(e){}}
+async function closeTrade(id){if(!confirm('Chiudere #'+id+'?'))return;var r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});var j=await r.json();if(j.ok){alert('✅ CHIUSO congelato '+j.trade.pnl_eur+'EUR');loadTrades();}}
+setLeva(10);updateCalc();loadPrice();loadTrades();
 </script>
 </body></html>
     """
