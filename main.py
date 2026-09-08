@@ -863,25 +863,25 @@ def api_my_trades_close():
 @app.route("/trading")
 def trading_page():
     html2 = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V83 CON GRAFICO</title>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V85 FIX CHIUSI CONGELATI</title>
 <style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none;background:#020617}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V83 CON GRAFICO</b> <span style="color:#22c55e">Grafico + Tasti OK</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Grafico TradingView + Leva + Trade - Tutto cliccabile</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V85 FIX CHIUSI</b> <span style="color:#22c55e">Chiusi congelati + Liq TG</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Fix: CHIUSO non si aggiorna più + Allarme liq su Telegram</div></div>
 
 <div style="margin:8px;display:flex;gap:8px">
-<button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800;font-size:14px">📈 Mostra Grafico TradingView</button>
-<button onclick="loadPrice()" style="padding:12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800;font-size:14px">🔄 Prezzo V71</button>
+<button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800;font-size:14px">📈 Mostra Grafico</button>
+<button onclick="loadPrice()" style="padding:12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800;font-size:14px">🔄 Prezzo</button>
 </div>
 
 <div class="tv-wrap" id="tvWrap">
-<div style="display:flex;justify-content:space-between;padding:8px;background:#020617;border-bottom:1px solid #1e293b"><b id="tvLabel">ETHUSDT 15m TradingView</b><button onclick="toggleChart()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155;font-size:11px">Chiudi X</button></div>
+<div style="display:flex;justify-content:space-between;padding:8px;background:#020617;border-bottom:1px solid #1e293b"><b id="tvLabel">ETHUSDT 15m</b><button onclick="toggleChart()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155;font-size:11px">Chiudi X</button></div>
 <iframe id="tvChart" src="https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol=BINANCE%3AETHUSDT&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it"></iframe>
 </div>
 
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center"><b id="coinTitle" style="font-size:18px">ETH 15m</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px 14px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;font-size:16px;font-weight:800"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
-<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $ - TOCCA PER AGGIORNARE</div>
-<div id="info" style="text-align:center;font-size:13px;color:#cbd5e1;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">EMA50: 2.480 | EMA150: 2.450 | BULL<br><span style="color:#22c55e">BOS: HH | SL 2.400 TP 2.600 | Conf 85%</span></div>
+<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $ - TOCCA</div>
+<div id="info" style="text-align:center;font-size:13px;color:#cbd5e1;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">Carico...</div>
 </div>
 
 <div class="card">
@@ -896,11 +896,16 @@ def trading_page():
 <button class="lev-btn" onclick="setLeva(100)">100x</button>
 </div>
 <div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e;font-size:13px">50 EUR x 10x = 500 EUR - PRONTO</div>
-<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V83 con grafico - Tasti sempre cliccabili</div>
+<div id="liqBarWrap" style="margin-top:10px;background:#020617;border:1px solid #1e293b;border-radius:10px;padding:10px;display:none">
+<div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:4px"><span id="liqLongLabel">Liq LONG --</span><span id="liqDistLabel">Safe --</span><span id="liqShortLabel">Liq SHORT --</span></div>
+<div style="background:#1e293b;border-radius:10px;height:14px;overflow:hidden;position:relative"><div id="liqBar" style="height:100%;width:50%;background:#22c55e;transition:width 0.5s"></div><div id="liqMarker" style="position:absolute;top:0;bottom:0;left:50%;width:3px;background:white"></div></div>
+<div id="liqAlert" style="margin-top:6px;font-size:11px;font-weight:800;text-align:center;display:none"></div>
+</div>
+<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V85 fix chiusi congelati + liq alert TG</div>
 </div>
 
 <div class="card">
-<b>I MIEI TRADE</b> <button onclick="loadTrades()" style="float:right;padding:6px 12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800">Aggiorna</button>
+<b>I MIEI TRADE (CHIUSI CONGELATI)</b> <button onclick="loadTrades()" style="float:right;padding:6px 12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800">Aggiorna</button>
 <div id="myTradesList" style="margin-top:10px">Nessun trade</div>
 </div>
 
@@ -916,32 +921,16 @@ function toggleChart(){
   var wrap=document.getElementById('tvWrap');
   var btn=document.getElementById('btnToggleChart');
   chartVisible=!chartVisible;
-  if(chartVisible){
-    wrap.classList.add('show');
-    btn.textContent='📉 Nascondi Grafico';
-    btn.style.background='#22c55e';
-    btn.style.color='#052e16';
-    loadTV();
-  }else{
-    wrap.classList.remove('show');
-    btn.textContent='📈 Mostra Grafico TradingView';
-    btn.style.background='#1e293b';
-    btn.style.color='#22c55e';
-  }
+  if(chartVisible){ wrap.classList.add('show'); btn.textContent='📉 Nascondi Grafico'; loadTV(); }
+  else{ wrap.classList.remove('show'); btn.textContent='📈 Mostra Grafico'; }
 }
-
 function loadTV(){
   try{
     var sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]||'BINANCE:ETHUSDT';
-    var tvSym=sym.replace(':','%3A');
-    var iframe=document.getElementById('tvChart');
-    if(iframe){
-      iframe.src='https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol='+tvSym+'&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&studies=%5B%22MASimple%4050%22%2C%22MAExp%4050%22%2C%22MAExp%40150%22%5D&theme=dark&style=1&timezone=Europe%2FRome&locale=it';
-      document.getElementById('tvLabel').textContent=curCoin+'USDT 15m TradingView';
-    }
+    document.getElementById('tvChart').src='https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol='+sym.replace(':','%3A')+'&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it';
+    document.getElementById('tvLabel').textContent=curCoin+'USDT 15m';
   }catch(e){}
 }
-
 function changeCoin(v){
   curCoin=v;
   var prices={BTC:75000, ETH:2503, ORO:2650};
@@ -954,7 +943,6 @@ function changeCoin(v){
   loadPrice();
   loadTrades();
 }
-
 function setLeva(l){
   lev=l;
   document.getElementById('levInfo').textContent=l+'x';
@@ -962,34 +950,52 @@ function setLeva(l){
   for(var i=0;i<btns.length;i++){ btns[i].classList.remove('active'); if(btns[i].textContent==l+'x') btns[i].classList.add('active'); }
   updateCalc();
 }
-
 function updateCalc(){
   var capEl=document.getElementById('capInput');
   if(capEl) capital=parseFloat(capEl.value)||50;
   var longLiq=currentPrice*(1-0.8/lev);
   var shortLiq=currentPrice*(1+0.8/lev);
   var pos=capital*lev;
-  document.getElementById('calc').innerHTML='<b style=color:#22c55e>'+capital+' EUR x '+lev+'x = '+pos+' EUR | '+curCoin+'</b><br>Entry ~'+currentPrice.toFixed(2)+' | LONG liq '+longLiq.toFixed(2)+' SHORT '+shortLiq.toFixed(2)+'<br>SL '+(lastSL?lastSL.toFixed(2):'--')+' TP '+(lastTP?lastTP.toFixed(2):'--')+' - PRONTO '+curCoin;
+  document.getElementById('calc').innerHTML='<b style=color:#22c55e>'+capital+' EUR x '+lev+'x = '+pos+' EUR | '+curCoin+'</b><br>Entry ~'+currentPrice.toFixed(2)+' | LONG liq '+longLiq.toFixed(2)+' SHORT '+shortLiq.toFixed(2)+'<br>SL '+(lastSL?lastSL.toFixed(2):'--')+' TP '+(lastTP?lastTP.toFixed(2):'--')+' - PRONTO';
+  try{
+    var wrap=document.getElementById('liqBarWrap');
+    if(wrap){ wrap.style.display='block';
+      document.getElementById('liqLongLabel').textContent='Liq LONG '+longLiq.toFixed(0);
+      document.getElementById('liqShortLabel').textContent='Liq SHORT '+shortLiq.toFixed(0);
+      var range=shortLiq-longLiq;
+      var posPct=range>0?((currentPrice-longLiq)/range*100):50;
+      posPct=Math.max(0,Math.min(100,posPct));
+      document.getElementById('liqMarker').style.left=posPct+'%';
+      var distLong=currentPrice-longLiq;
+      var distShort=shortLiq-currentPrice;
+      var distMin=Math.min(distLong,distShort);
+      var distPct=(distMin/(currentPrice*0.8/lev))*100;
+      if(isNaN(distPct)) distPct=100;
+      document.getElementById('liqDistLabel').textContent='Safe '+distPct.toFixed(0)+'%';
+      var bar=document.getElementById('liqBar');
+      bar.style.width=distPct+'%';
+      bar.style.background=distPct>50?'#22c55e':distPct>20?'#facc15':'#ef4444';
+      var alertEl=document.getElementById('liqAlert');
+      if(distPct<20){ alertEl.style.display='block'; alertEl.style.color='#ef4444'; alertEl.textContent='🔴 PERICOLO LIQ! '+distPct.toFixed(0)+'% - Rischio!'; }
+      else if(distPct<40){ alertEl.style.display='block'; alertEl.style.color='#facc15'; alertEl.textContent='🟡 Attenzione '+distPct.toFixed(0)+'% dalla liq'; }
+      else alertEl.style.display='none';
+    }
+  }catch(e){}
 }
-
 async function loadPrice(){
   try{
-    document.getElementById('debug').textContent='Carico V71 '+curCoin+'...';
     var r=await fetch('/api/signals?tf=15m');
     var j=await r.json();
     if(j.ok && j.coins && j.coins[curCoin]){
       var info=j.coins[curCoin];
-      currentPrice=info.price;
-      lastSL=info.sl; lastTP=info.tp;
+      currentPrice=info.price; lastSL=info.sl; lastTP=info.tp;
       document.getElementById('coinTitle').textContent=curCoin+' 15m - '+info.signal;
-      document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+curCoin+' '+info.signal;
-      document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+' '+info.trend+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'%</span>';
+      document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+curCoin;
+      document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'%</span>';
       updateCalc();
-      document.getElementById('debug').textContent='V71 ok '+curCoin+' '+currentPrice;
     }
-  }catch(e){ document.getElementById('debug').textContent='Offline '+e.message; }
+  }catch(e){}
 }
-
 async function doTrade(side){
   try{
     var capEl=document.getElementById('capInput');
@@ -997,37 +1003,43 @@ async function doTrade(side){
     var payload={coin:curCoin, side:side, entry:currentPrice, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
     var r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     var j=await r.json();
-    if(j.ok){ alert('✅ '+side+' '+curCoin+' SALVATO! Entry '+currentPrice.toFixed(2)); loadTrades(); }
-    else alert('Errore: '+j.error);
-  }catch(e){ alert('Errore: '+e.message); }
+    if(j.ok){ alert('✅ '+side+' '+curCoin+' SALVATO!'); loadTrades(); }
+  }catch(e){ alert(e.message); }
 }
-
 async function loadTrades(){
   try{
     var r=await fetch('/api/my_trades');
     var j=await r.json();
     var list=document.getElementById('myTradesList');
-    if(!j.trades || j.trades.length==0){ list.innerHTML='Nessun trade '+curCoin; return; }
+    if(!j.trades || j.trades.length==0){ list.innerHTML='Nessun trade'; return; }
     var html='';
     for(var i=j.trades.length-1;i>=0;i--){
       var t=j.trades[i];
       var col=t.pnl_eur>=0?'#22c55e':'#ef4444';
-      html+='<div style=background:#020617;padding:10px;margin:4px 0;border-radius:8px;border-left:3px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x Entry '+t.entry.toFixed(2)+' <span style=float:right;color:'+col+'>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR</span><br><span style=font-size:10px;color:#94a3b8>'+t.status+' '+t.time.slice(11,19)+'</span> '+(t.status=='APERTO'?'<button onclick=closeTrade('+t.id+') style=padding:4px 8px;border-radius:12px;background:#f59e0b;border:none>CHIUDI</button>':'')+'</div>';
+      if(t.status=='CHIUSO'){
+        // CHIUSO CONGELATO - mostra Entry -> Close e PnL congelato
+        html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid #64748b;opacity:0.9><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Close '+ (t.close_price?t.close_price.toFixed(2):'--')+'<br><span style=color:#94a3b8>CHIUSO '+t.time.slice(11,19)+' → '+(t.close_time?t.close_time.slice(11,19):'')+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800;font-size:14px>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR<br><span style=font-size:11px>'+t.pnl_pct+'%</span></div><div style=font-size:10px;color:#64748b>CONGELATO</div></div></div></div>';
+      }else{
+        // APERTO LIVE
+        var liqTxt=t.liq_price?' Liq '+t.liq_price:'';
+        var distTxt=t.dist_to_liq!=null?' Safe '+t.dist_to_liq+'%':'';
+        var danger = t.liq_danger ? ' 🔴' : '';
+        html+='<div style=background:#020617;padding:10px;margin:6px 0;border-radius:8px;border-left:4px solid '+(t.side=='LONG'?'#22c55e':'#ef4444')+'><div style=display:flex;justify-content:space-between><div><b>'+t.side+' '+t.coin+'</b> '+t.leverage+'x '+t.capital+'EUR'+danger+'<br><span style=font-size:11px>Entry '+t.entry.toFixed(2)+' → Ora '+(t.current_price?t.current_price.toFixed(2):'--')+liqTxt+'<br><span style=color:#94a3b8>'+t.status+' '+distTxt+'</span></div><div style=text-align:right><div style=color:'+col+';font-weight:800>'+(t.pnl_eur>=0?'+':'')+t.pnl_eur+'EUR<br><span style=font-size:11px>'+t.pnl_pct+'%</span></div><button onclick=closeTrade('+t.id+') style=margin-top:4px;padding:6px 12px;border-radius:20px;background:#f59e0b;color:black;border:none;font-weight:800;font-size:11px>CHIUDI</button></div></div></div>';
+      }
     }
     list.innerHTML=html;
-  }catch(e){}
+    document.getElementById('debug').textContent='Trades caricati - Chiusi congelati OK';
+  }catch(e){ document.getElementById('debug').textContent='Err trades '+e.message; }
 }
 async function closeTrade(id){
-  if(!confirm('Chiudere #'+id+'?')) return;
-  var r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
-  var j=await r.json();
-  if(j.ok){ alert('Chiuso '+j.trade.pnl_eur); loadTrades(); }
+  if(!confirm('Chiudere #'+id+'? PnL verrà congelato!')) return;
+  try{
+    var r=await fetch('/api/my_trades/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+    var j=await r.json();
+    if(j.ok){ alert('✅ CHIUSO! PnL congelato: '+j.trade.pnl_eur+'EUR a '+j.trade.close_price.toFixed(2)); loadTrades(); }
+  }catch(e){ alert(e.message); }
 }
-
-setLeva(10);
-updateCalc();
-loadPrice();
-loadTrades();
+setLeva(10); updateCalc(); loadPrice(); loadTrades();
 </script>
 </body></html>
     """
@@ -1181,3 +1193,4 @@ def bg_loop():
 threading.Thread(target=bg_loop, daemon=True).start()
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
+
