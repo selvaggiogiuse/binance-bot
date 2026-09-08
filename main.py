@@ -16,7 +16,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 TELEGRAM_MIN_CONF = 82
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V82 CRIPTO FIX - CAMBIO OK"
+VERSION = "V83 CON GRAFICO - TASTI OK"
 COOLDOWN = 900
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -863,14 +863,24 @@ def api_my_trades_close():
 @app.route("/trading")
 def trading_page():
     html2 = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V82 CRIPTO FIX</title>
-<style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:32px;font-weight:900;color:#22c55e;text-align:center;padding:14px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}</style>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V83 CON GRAFICO</title>
+<style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none;background:#020617}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V82 CRIPTO FIX</b> <span style="color:#22c55e">Cambio cripto ok</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Leva e trade ok - Ora fix cambio cripto</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b style="font-size:20px">V83 CON GRAFICO</b> <span style="color:#22c55e">Grafico + Tasti OK</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Grafico TradingView + Leva + Trade - Tutto cliccabile</div></div>
+
+<div style="margin:8px;display:flex;gap:8px">
+<button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800;font-size:14px">📈 Mostra Grafico TradingView</button>
+<button onclick="loadPrice()" style="padding:12px;border-radius:20px;background:#22c55e;color:#052e16;border:none;font-weight:800;font-size:14px">🔄 Prezzo V71</button>
+</div>
+
+<div class="tv-wrap" id="tvWrap">
+<div style="display:flex;justify-content:space-between;padding:8px;background:#020617;border-bottom:1px solid #1e293b"><b id="tvLabel">ETHUSDT 15m TradingView</b><button onclick="toggleChart()" style="padding:4px 10px;border-radius:20px;background:#1e293b;color:white;border:1px solid #334155;font-size:11px">Chiudi X</button></div>
+<iframe id="tvChart" src="https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol=BINANCE%3AETHUSDT&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&theme=dark&style=1&timezone=Europe%2FRome&locale=it"></iframe>
+</div>
 
 <div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center"><b id="coinTitle" style="font-size:18px">ETH 15m - TEST</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px 14px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;font-size:16px;font-weight:800"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
-<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $ - CLICCA PER AGGIORNARE PREZZO V71</div>
+<div style="display:flex;justify-content:space-between;align-items:center"><b id="coinTitle" style="font-size:18px">ETH 15m</b><select id="coinSel" onchange="changeCoin(this.value)" style="padding:10px 14px;border-radius:20px;background:#020617;color:white;border:2px solid #22c55e;font-size:16px;font-weight:800"><option value="BTC">BTC</option><option value="ETH" selected>ETH</option><option value="ORO">ORO</option></select></div>
+<div id="priceBig" class="price-big" onclick="loadPrice()">2.503 $ - TOCCA PER AGGIORNARE</div>
 <div id="info" style="text-align:center;font-size:13px;color:#cbd5e1;background:#020617;padding:10px;border-radius:10px;border:1px solid #1e293b">EMA50: 2.480 | EMA150: 2.450 | BULL<br><span style="color:#22c55e">BOS: HH | SL 2.400 TP 2.600 | Conf 85%</span></div>
 </div>
 
@@ -885,8 +895,8 @@ def trading_page():
 <button class="lev-btn" onclick="setLeva(50)">50x</button>
 <button class="lev-btn" onclick="setLeva(100)">100x</button>
 </div>
-<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e;font-size:13px">50 EUR x 10x = 500 EUR - Leva OK</div>
-<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V82 caricato - Cambia cripto per test</div>
+<div id="calc" style="margin-top:12px;background:#020617;padding:12px;border-radius:10px;border:2px solid #22c55e;font-size:13px">50 EUR x 10x = 500 EUR - PRONTO</div>
+<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V83 con grafico - Tasti sempre cliccabili</div>
 </div>
 
 <div class="card">
@@ -900,18 +910,47 @@ def trading_page():
 </div>
 
 <script>
-var curCoin='ETH', lev=10, currentPrice=2503, capital=50, lastSL=2400, lastTP=2600;
+var curCoin='ETH', lev=10, currentPrice=2503, capital=50, lastSL=2400, lastTP=2600, chartVisible=false;
+
+function toggleChart(){
+  var wrap=document.getElementById('tvWrap');
+  var btn=document.getElementById('btnToggleChart');
+  chartVisible=!chartVisible;
+  if(chartVisible){
+    wrap.classList.add('show');
+    btn.textContent='📉 Nascondi Grafico';
+    btn.style.background='#22c55e';
+    btn.style.color='#052e16';
+    loadTV();
+  }else{
+    wrap.classList.remove('show');
+    btn.textContent='📈 Mostra Grafico TradingView';
+    btn.style.background='#1e293b';
+    btn.style.color='#22c55e';
+  }
+}
+
+function loadTV(){
+  try{
+    var sym={BTC:'BINANCE:BTCUSDT',ETH:'BINANCE:ETHUSDT',ORO:'BINANCE:PAXGUSDT'}[curCoin]||'BINANCE:ETHUSDT';
+    var tvSym=sym.replace(':','%3A');
+    var iframe=document.getElementById('tvChart');
+    if(iframe){
+      iframe.src='https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol='+tvSym+'&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0F172A&studies=%5B%22MASimple%4050%22%2C%22MAExp%4050%22%2C%22MAExp%40150%22%5D&theme=dark&style=1&timezone=Europe%2FRome&locale=it';
+      document.getElementById('tvLabel').textContent=curCoin+'USDT 15m TradingView';
+    }
+  }catch(e){}
+}
 
 function changeCoin(v){
   curCoin=v;
   var prices={BTC:75000, ETH:2503, ORO:2650};
   currentPrice=prices[v]||2503;
-  document.getElementById('coinTitle').textContent=v+' 15m - '+v;
-  document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+v+' - CLICCA PER V71';
-  document.getElementById('debug').textContent='Coin cambiata in '+v+' prezzo '+currentPrice+' - Ora carica V71...';
-  // Aggiorna calc subito
+  document.getElementById('coinTitle').textContent=v+' 15m';
+  document.getElementById('priceBig').textContent=currentPrice.toFixed(2)+' $ - '+v;
+  document.getElementById('debug').textContent='Coin '+v+' '+currentPrice;
   updateCalc();
-  // Poi prova a caricare prezzo vero da V71
+  if(chartVisible) loadTV();
   loadPrice();
   loadTrades();
 }
@@ -922,7 +961,6 @@ function setLeva(l){
   var btns=document.querySelectorAll('.lev-btn');
   for(var i=0;i<btns.length;i++){ btns[i].classList.remove('active'); if(btns[i].textContent==l+'x') btns[i].classList.add('active'); }
   updateCalc();
-  document.getElementById('debug').textContent='Leva '+l+'x - Coin '+curCoin;
 }
 
 function updateCalc(){
@@ -948,30 +986,19 @@ async function loadPrice(){
       document.getElementById('info').innerHTML='EMA50: '+(info.ema50?info.ema50.toFixed(1):'--')+' EMA150: '+(info.ema150?info.ema150.toFixed(1):'--')+' '+info.trend+'<br><span style=color:#22c55e>BOS: '+info.bos_type+' SL '+info.sl.toFixed(1)+' TP '+info.tp.toFixed(1)+' Conf '+info.conf+'%</span>';
       updateCalc();
       document.getElementById('debug').textContent='V71 ok '+curCoin+' '+currentPrice;
-    }else{
-      document.getElementById('debug').textContent='V71 vuoto, uso fallback '+curCoin+' '+currentPrice;
     }
-  }catch(e){
-    document.getElementById('debug').textContent='Offline fallback '+curCoin+' '+currentPrice+' err '+e.message;
-  }
+  }catch(e){ document.getElementById('debug').textContent='Offline '+e.message; }
 }
 
 async function doTrade(side){
   try{
     var capEl=document.getElementById('capInput');
     if(capEl) capital=parseFloat(capEl.value)||50;
-    document.getElementById('debug').textContent='Salvo '+side+' '+curCoin+' '+currentPrice+' '+lev+'x...';
     var payload={coin:curCoin, side:side, entry:currentPrice, leverage:lev, capital:capital, sl:lastSL, tp:lastTP};
     var r=await fetch('/api/my_trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    var txt=await r.text();
-    var j=JSON.parse(txt);
-    if(j.ok){
-      alert('✅ '+side+' '+curCoin+' SALVATO! Entry '+currentPrice.toFixed(2));
-      loadTrades();
-      document.getElementById('debug').textContent=side+' '+curCoin+' salvato ID '+j.trade.id;
-    }else{
-      alert('Errore: '+j.error);
-    }
+    var j=await r.json();
+    if(j.ok){ alert('✅ '+side+' '+curCoin+' SALVATO! Entry '+currentPrice.toFixed(2)); loadTrades(); }
+    else alert('Errore: '+j.error);
   }catch(e){ alert('Errore: '+e.message); }
 }
 
@@ -997,7 +1024,6 @@ async function closeTrade(id){
   if(j.ok){ alert('Chiuso '+j.trade.pnl_eur); loadTrades(); }
 }
 
-// Init
 setLeva(10);
 updateCalc();
 loadPrice();
@@ -1155,4 +1181,3 @@ def bg_loop():
 threading.Thread(target=bg_loop, daemon=True).start()
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",10000)))
-
