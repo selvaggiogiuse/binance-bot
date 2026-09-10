@@ -14,9 +14,9 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 88
+TELEGRAM_MIN_CONF = 85
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V87 ULTRA PRECISION - MENO ERRORI - 88%+ BOS FORTE" 
+VERSION = "V88 FIX TG - RIPARATO NO MSG DA MARTEDI - 85% + DEBUG"
 COOLDOWN = 1800
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -27,7 +27,7 @@ LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
 USER_TRADES = []
 TRADE_ID_COUNTER = 1
-ADAPTIVE_CONF = 88
+ADAPTIVE_CONF = 85
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -465,10 +465,10 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona VENDI 32-58"
             color="wait"; label=f"RSI NO ZONA V87"
         # FILTRO 6: Score alto e diff alta
-        elif compra_score > vendi_score and compra_score >= 80 and (compra_score - vendi_score) >= 25:
+        elif compra_score > vendi_score and compra_score >= 75 and (compra_score - vendi_score) >= 20:
             signal="COMPRA"; conf=50+compra_score; diff=compra_score-vendi_score
             conf = max(20, min(96, 58 + compra_score + diff))
-        elif vendi_score > compra_score and vendi_score >= 80 and (vendi_score - compra_score) >= 25:
+        elif vendi_score > compra_score and vendi_score >= 75 and (vendi_score - compra_score) >= 20:
             signal="VENDI"; conf=50+vendi_score; diff=vendi_score-compra_score
             conf = max(20, min(96, 58 + vendi_score + diff))
         else:
@@ -958,10 +958,10 @@ def api_my_trades_close():
 @app.route("/trading")
 def trading_page():
     html2 = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V87 ULTRA PRECISION + FIX CHIUSI</title>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V88 FIX TG - NO MSG DA MARTEDI</title>
 <style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V87 ULTRA PRECISION</b> <span style="color:#22c55e">Meno errori - 88%+ BOS forte</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V88 FIX TG</b> <span style="color:#22c55e">Fix no msg da martedì - 85% + Debug</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
 
 <div style="margin:8px;display:flex;gap:8px">
 <button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800">📈 Grafico</button>
@@ -996,7 +996,7 @@ def trading_page():
 <div style="background:#1e293b;border-radius:10px;height:14px;overflow:hidden;position:relative"><div id="liqBar" style="height:100%;width:50%;background:#22c55e;transition:width 0.5s"></div><div id="liqMarker" style="position:absolute;top:0;bottom:0;left:50%;width:3px;background:white"></div></div>
 <div id="liqAlert" style="margin-top:6px;font-size:11px;font-weight:800;text-align:center;display:none"></div>
 </div>
-<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V87 meno errori - 88%+ BOS forte + HTF + RSI zona</div>
+<div id="debug" style="margin-top:8px;padding:8px;background:#1e293b;border-radius:8px;font-size:12px;color:#fbbf24">V88 fix TG - debug perché non manda + test button</div>
 </div>
 
 <div class="card">
@@ -1164,6 +1164,7 @@ def bg_loop():
     while True:
         try:
             check_pending_trades()
+            check_user_trades_liquidation()
             for tf in ["15m","1H","4H"]:
                 for name in PAIRS.keys():
                     analyze(name, tf, do_tg=True)
