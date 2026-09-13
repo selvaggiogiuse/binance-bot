@@ -14,9 +14,9 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 80
+TELEGRAM_MIN_CONF = 65
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V90 BALANCED CON BLOCCO NOTTE - 80% - TORNA MSG"
+VERSION = "V91 FIX ZERO MSG - 65% - Manda anche con Conf bassa"
 COOLDOWN = 900
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -27,7 +27,7 @@ LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
 USER_TRADES = []
 TRADE_ID_COUNTER = 1
-ADAPTIVE_CONF = 80
+ADAPTIVE_CONF = 65
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -443,7 +443,7 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             signal="ASPETTA"; conf=30; extra=f"❌ V87: Conflitto BOS {bos_signal} vs EMA {ema_signal} - causa LOSS"
             color="wait"; label=f"CONFLITTO V87"
         # FILTRO 2: BOS deve essere FORTE (solo HH+HL o LH+LL bonus 40)
-        elif bos_bonus < 20:
+        elif bos_bonus < 10:
             signal="ASPETTA"; conf=35; extra=f"❌ V87: BOS debole {bos_type} bonus {bos_bonus} - vuole solo HH+HL/LH+LL forte"
             color="wait"; label=f"BOS DEBOLE V87"
         # FILTRO 3: HTF 1H deve allinearsi (se c'è)
@@ -465,10 +465,10 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona VENDI 32-58"
             color="wait"; label=f"RSI NO ZONA V87"
         # FILTRO 6: Score alto e diff alta
-        elif compra_score > vendi_score and compra_score >= 65 and (compra_score - vendi_score) >= 15:
+        elif compra_score > vendi_score and compra_score >= 50 and (compra_score - vendi_score) >= 10:
             signal="COMPRA"; conf=50+compra_score; diff=compra_score-vendi_score
             conf = max(20, min(96, 58 + compra_score + diff))
-        elif vendi_score > compra_score and vendi_score >= 65 and (vendi_score - compra_score) >= 15:
+        elif vendi_score > compra_score and vendi_score >= 50 and (vendi_score - compra_score) >= 10:
             signal="VENDI"; conf=50+vendi_score; diff=vendi_score-compra_score
             conf = max(20, min(96, 58 + vendi_score + diff))
         else:
@@ -494,8 +494,8 @@ def analyze(name, tf, do_tg=False, force_tg=False):
                 extra+=f" • ⚠️ {regime_msg}"
                 conf=max(15,conf-20)
             min_conf=adaptive
-            vol_ok = 1.0 <= vol_ratio <= 5.0
-            atr_ok = 0.2 <= atr_pct <= 3.0
+            vol_ok = 0.5 <= vol_ratio <= 6.0
+            atr_ok = 0.1 <= atr_pct <= 4.0
             hour = rome_hour()
             time_ok = not (1 <= hour <= 5)  # V90: blocco notte 01-05 mantenuto come richiesto
             # V71 STRICT: solo se BOS+EMA concordi + VOL ok + regime ok + conf >= adapt
@@ -961,7 +961,7 @@ def trading_page():
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V88 FIX TG - NO MSG DA MARTEDI</title>
 <style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V90 BLOCCO NOTTE</b> <span style="color:#22c55e">Blocco notte 01-05 mantenuto + 80% + Torna msg</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V91 FIX ZERO MSG</b> <span style="color:#22c55e">Fix non arriva nulla - ora manda da 65% + blocco notte 01-05</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
 
 <div style="margin:8px;display:flex;gap:8px">
 <button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800">📈 Grafico</button>
