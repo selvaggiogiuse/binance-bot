@@ -14,9 +14,9 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-TELEGRAM_MIN_CONF = 65
+TELEGRAM_MIN_CONF = 60
 PAIRS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "ORO": "PAXGUSDT"}
-VERSION = "V91 FIX ZERO MSG - 65% - Manda anche con Conf bassa"
+VERSION = "V94 FIX CODE BUGS - VOL+ CACHE+ LAST_ENTRA - 60% - BLOCCO NOTTE"
 COOLDOWN = 900
 LAST_TELEGRAM = {}
 LAST_ENTRA = {}
@@ -27,7 +27,7 @@ LEVERAGE_CONFIG = {"leverage": 10, "margin_mode": "ISOLATED"}
 OHLC_CACHE = {}
 USER_TRADES = []
 TRADE_ID_COUNTER = 1
-ADAPTIVE_CONF = 65
+ADAPTIVE_CONF = 60
 
 def ema_calc(data, p):
     if len(data) < p: return sum(data)/len(data) if data else 0
@@ -159,7 +159,8 @@ def analyze_simplified(ohlc, ohlc_1h):
     avg_vol=sum(vols[-20:])/20 if len(vols)>=20 else 1
     cur_vol=vols[-1] if vols else 1
     vol_ratio=cur_vol/avg_vol if avg_vol>0 else 1
-    if 1.2<=vol_ratio<=4.0: methods["VOL"]={"signal":"COMPRA","score":10,"desc":f"Vol x{vol_ratio:.1f} ok","vol_ratio":vol_ratio}
+    # FIX V94: VOL non deve dare COMPRA bias, solo filtro neutro
+    if 1.0<=vol_ratio<=5.0: methods["VOL"]={"signal":"ASPETTA","score":10,"desc":f"Vol x{vol_ratio:.1f} ok","vol_ratio":vol_ratio}
     elif vol_ratio>5.0: methods["VOL"]={"signal":"ASPETTA","score":-20,"desc":f"Vol x{vol_ratio:.1f} PUMP - STOP","vol_ratio":vol_ratio}
     else: methods["VOL"]={"signal":"ASPETTA","score":0,"desc":f"Vol x{vol_ratio:.1f} basso","vol_ratio":vol_ratio}
     # 1H V67
@@ -194,24 +195,33 @@ def get_price(name):
                 return float(res[k]["c"][0]), "KRAKEN"
     except:
         pass
-    # fallback da cache OHLC
+    # fallback da cache OHLC - gestisce sia lista che tupla (now, ohlc)
     try:
         for tf in ["15m","1H","5m"]:
-            key=f"{name}_{tf}"
-            if key in OHLC_CACHE and OHLC_CACHE[key]:
-                return float(OHLC_CACHE[key][-1]["close"]), "CACHE"
-    except:
+            for key in [f"{name}_{tf}", f"{name}_{tf}_200", f"{name}_{tf}_100"]:
+                if key in OHLC_CACHE and OHLC_CACHE[key]:
+                    cached = OHLC_CACHE[key]
+                    ohlc_list = cached[1] if isinstance(cached, tuple) else cached
+                    if ohlc_list and len(ohlc_list)>0:
+                        last = ohlc_list[-1]
+                        if isinstance(last, dict) and "close" in last:
+                            return float(last["close"]), "CACHE"
+                        elif isinstance(last, (list, tuple)):
+                            return float(last[4]), "CACHE"
+    except Exception as e:
+        print(f"get_price cache fallback error {e}")
         pass
-    # ULTIMO FALLBACK - prezzo fisso realistico
-    fallback={"BTC":75000.0,"ETH":2503.0,"ORO":2650.0}
-    return fallback.get(name,2500.0), "FALLBACK"
+    # CoinGecko fallback
     try:
         cg={"BTC":"bitcoin","ETH":"ethereum","ORO":"pax-gold"}[name]
         r=requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={cg}&vs_currencies=usd",timeout=8)
-        if r.status_code==200: return float(r.json()[cg]["usd"]), "COINGECKO"
+        if r.status_code==200: 
+            return float(r.json()[cg]["usd"]), "COINGECKO"
     except: pass
-    fallback={"BTC": 78405.0, "ETH": 2480.0, "ORO": 2350.0}
-    return fallback.get(name, 78405.0), "FALLBACK_REAL"
+    # ULTIMO FALLBACK - prezzo fisso realistico
+    fallback={"BTC":75000.0,"ETH":2503.0,"ORO":2650.0}
+    return fallback.get(name,2500.0), "FALLBACK"
+
 
 def fetch_binance_fast(sym, interval, limit=200):
     try:
@@ -428,52 +438,52 @@ def analyze(name, tf, do_tg=False, force_tg=False):
         for k,v in methods.items():
             if v["signal"]=="COMPRA": compra_score+=v["score"]
             elif v["signal"]=="VENDI": vendi_score+=v["score"]
-        # V87 ULTRA PRECISION - SOLO SEGNALI PERFETTI per non sbagliare
+        # V93 SAME FORMAT - FIX TG ZERO MSG - 60% - BLOCCO NOTTE 01-05 mantenuto
         bos_signal = methods.get("BOS",{}).get("signal")
         ema_signal = methods.get("EMA",{}).get("signal")
         h1_signal = methods.get("1H",{}).get("signal") if "1H" in methods else None
-        rsi_val = rsi  # rsi già calcolato
+        rsi_val = rsi
         bos_type = methods.get("BOS",{}).get("type","")
         bos_bonus = methods.get("BOS",{}).get("bonus",0)
         # FILTRO 1: BOS+EMA obbligatori e concordi
         if bos_signal=="ASPETTA" or ema_signal=="ASPETTA":
-            signal="ASPETTA"; conf=25; extra="❌ V87: NO BOS/EMA - skip per precisione"
-            color="wait"; label=f"ASPETTA NO BOS/EMA V87"
+            signal="ASPETTA"; conf=25; extra="V93: NO BOS/EMA - skip"
+            color="wait"; label=f"ASPETTA NO BOS/EMA V93"
         elif bos_signal != ema_signal:
-            signal="ASPETTA"; conf=30; extra=f"❌ V87: Conflitto BOS {bos_signal} vs EMA {ema_signal} - causa LOSS"
-            color="wait"; label=f"CONFLITTO V87"
-        # FILTRO 2: BOS deve essere FORTE (solo HH+HL o LH+LL bonus 40)
-        elif bos_bonus < 10:
-            signal="ASPETTA"; conf=35; extra=f"❌ V87: BOS debole {bos_type} bonus {bos_bonus} - vuole solo HH+HL/LH+LL forte"
-            color="wait"; label=f"BOS DEBOLE V87"
-        # FILTRO 3: HTF 1H deve allinearsi (se c'è)
+            signal="ASPETTA"; conf=30; extra=f"V93: Conflitto BOS {bos_signal} vs EMA {ema_signal}"
+            color="wait"; label=f"CONFLITTO V93"
+        # FILTRO 2: BOS debole bloccato solo se <15
+        elif bos_bonus < 15:
+            signal="ASPETTA"; conf=35; extra=f"V93: BOS debole {bos_type} bonus {bos_bonus}"
+            color="wait"; label=f"BOS DEBOLE V93"
+        # FILTRO 3: HTF 1H allineato
         elif h1_signal and h1_signal!="ASPETTA" and h1_signal != bos_signal:
-            signal="ASPETTA"; conf=40; extra=f"❌ V87: HTF 1H {h1_signal} vs {bos_signal} - disallineato, no trade"
-            color="wait"; label=f"HTF NO V87"
-        # FILTRO 4: RSI non estremo (evita top/bottom)
-        elif bos_signal=="COMPRA" and rsi_val > 75:
-            signal="ASPETTA"; conf=40; extra=f"❌ V87: RSI {rsi_val:.0f} ipercomprato >68 - evita COMPRA"
-            color="wait"; label=f"RSI OVERBOUGHT V87"
-        elif bos_signal=="VENDI" and rsi_val < 25:
-            signal="ASPETTA"; conf=40; extra=f"❌ V87: RSI {rsi_val:.0f} ipervenduto <32 - evita VENDI"
-            color="wait"; label=f"RSI OVERSOLD V87"
-        # FILTRO 5: RSI deve essere in zona buona (40-68 per COMPRA, 32-60 per VENDI)
-        elif bos_signal=="COMPRA" and not (38 <= rsi_val <= 75):
-            signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona COMPRA 42-68"
-            color="wait"; label=f"RSI NO ZONA V87"
-        elif bos_signal=="VENDI" and not (25 <= rsi_val <= 62):
-            signal="ASPETTA"; conf=45; extra=f"❌ V87: RSI {rsi_val:.0f} fuori zona VENDI 32-58"
-            color="wait"; label=f"RSI NO ZONA V87"
-        # FILTRO 6: Score alto e diff alta
+            signal="ASPETTA"; conf=40; extra=f"V93: HTF 1H {h1_signal} vs {bos_signal} disallineato"
+            color="wait"; label=f"HTF NO V93"
+        # FILTRO 4: RSI estremo
+        elif bos_signal=="COMPRA" and rsi_val > 78:
+            signal="ASPETTA"; conf=40; extra=f"V93: RSI {rsi_val:.0f} ipercomprato"
+            color="wait"; label=f"RSI OVER V93"
+        elif bos_signal=="VENDI" and rsi_val < 22:
+            signal="ASPETTA"; conf=40; extra=f"V93: RSI {rsi_val:.0f} ipervenduto"
+            color="wait"; label=f"RSI UNDER V93"
+        # FILTRO 5: RSI zona buona più larga
+        elif bos_signal=="COMPRA" and not (35 <= rsi_val <= 78):
+            signal="ASPETTA"; conf=45; extra=f"V93: RSI {rsi_val:.0f} fuori zona COMPRA"
+            color="wait"; label=f"RSI NO ZONA V93"
+        elif bos_signal=="VENDI" and not (22 <= rsi_val <= 65):
+            signal="ASPETTA"; conf=45; extra=f"V93: RSI {rsi_val:.0f} fuori zona VENDI"
+            color="wait"; label=f"RSI NO ZONA V93"
+        # FILTRO 6: Score più basso per tornare a mandare
         elif compra_score > vendi_score and compra_score >= 50 and (compra_score - vendi_score) >= 10:
             signal="COMPRA"; conf=50+compra_score; diff=compra_score-vendi_score
-            conf = max(20, min(96, 58 + compra_score + diff))
+            conf = max(20, min(96, 55 + compra_score + diff))
         elif vendi_score > compra_score and vendi_score >= 50 and (vendi_score - compra_score) >= 10:
             signal="VENDI"; conf=50+vendi_score; diff=vendi_score-compra_score
-            conf = max(20, min(96, 58 + vendi_score + diff))
+            conf = max(20, min(96, 55 + vendi_score + diff))
         else:
-            signal="ASPETTA"; conf=max(compra_score,vendi_score); extra=f"❌ V87: Score basso o diff bassa BULL{compra_score} BEAR{vendi_score} - vuole >=80 e diff>=25"
-            color="wait"; label=f"ASPETTA SCORE V87"
+            signal="ASPETTA"; conf=max(compra_score,vendi_score); extra=f"V93: Score basso BULL{compra_score} BEAR{vendi_score} vuole >=50 diff>=10"
+            color="wait"; label=f"ASPETTA SCORE V93"
             signal="ASPETTA"
         
         # Se non abbiamo già settato extra per i casi sopra, calcoliamo normale
@@ -494,10 +504,10 @@ def analyze(name, tf, do_tg=False, force_tg=False):
                 extra+=f" • ⚠️ {regime_msg}"
                 conf=max(15,conf-20)
             min_conf=adaptive
-            vol_ok = 0.5 <= vol_ratio <= 6.0
-            atr_ok = 0.1 <= atr_pct <= 4.0
+            vol_ok = 1.0 <= vol_ratio <= 5.0
+            atr_ok = 0.2 <= atr_pct <= 3.0
             hour = rome_hour()
-            time_ok = not (1 <= hour <= 5)  # V90: blocco notte 01-05 mantenuto come richiesto
+            time_ok = not (1 <= hour <= 5)  # V93: blocco notte 01-05 mantenuto come richiesto
             # V71 STRICT: solo se BOS+EMA concordi + VOL ok + regime ok + conf >= adapt
             if conf>=min_conf and vol_ok and atr_ok and time_ok and signal!="ASPETTA" and bos_signal==ema_signal and (regime_ok or not is_real_mode):
                 color="entra"; label=f"ENTRA {signal} B{compra_score} vs B{vendi_score} - V71 HIGH WR"
@@ -513,10 +523,15 @@ def analyze(name, tf, do_tg=False, force_tg=False):
             label=label if 'label' in locals() else "ASPETTA V71"
         key=f"{name}_{tf}"; now=time.time()
         data={"price":price,"source":source,"signal":signal,"conf":int(conf) if 'conf' in locals() else 50,"quality_color":color,"quality_label":label,"rsi":int(rsi),"stoch_k":50,"vol_ratio":round(vol_ratio,2),"sl":sl,"tp":tp,"sl_pct":sl_pct,"tp_pct":tp_pct,"rr":round(tp_pct/sl_pct,1) if sl_pct>0 else 2.5,"support":0,"resistance":0,"spark":closes[-30:],"extra":extra,"h1":methods.get("1H",{}).get("desc",""),"ema9":ema9,"ema21":ema21,"ema50":ema50,"close":close_price,"is_real":is_real_mode,"atr":atr,"atr_pct":atr_pct,"adaptive":adaptive,"regime_ok":True,"methods":methods,"compra_score":compra_score,"vendi_score":vendi_score,"bos_type":methods.get("BOS",{}).get("type",""),"bos_desc":methods.get("BOS",{}).get("desc","")}
+        # FIX V94: LAST_ENTRA non deve bloccare Telegram, solo stabilizza UI
         if key in LAST_ENTRA:
             prev=LAST_ENTRA[key]
             if now - prev["time"] < STABLE_SECONDS and prev["data"]["quality_color"]=="entra" and color!="entra":
-                return prev["data"], None
+                # Mantieni visual entra ma permetti di ricalcolare tg sotto
+                data["quality_color"]="entra"
+                data["quality_label"]=prev["data"]["quality_label"]+" (STABILE)"
+                # Non fare return early, continua per inviare tg se serve
+
         if color=="entra":
             LAST_ENTRA[key]={"time":now,"data":data}
         tg_res=None
@@ -961,7 +976,7 @@ def trading_page():
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>V88 FIX TG - NO MSG DA MARTEDI</title>
 <style>*{box-sizing:border-box;font-family:sans-serif}body{margin:0;background:#020617;color:#e2e8f0;padding-bottom:160px}.card{margin:8px;background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px}.btn{padding:18px;border-radius:14px;border:none;font-weight:900;font-size:18px;flex:1;color:white}.btn-green{background:#16a34a}.btn-red{background:#dc2626}.lev-btn{padding:12px 18px;border-radius:20px;border:2px solid #334155;background:#1e293b;color:#cbd5e1;margin:4px;font-weight:800}.lev-btn.active{background:#22c55e;color:#052e16;border-color:#22c55e}.price-big{font-size:30px;font-weight:900;color:#22c55e;text-align:center;padding:12px;background:#020617;border:3px solid #22c55e;border-radius:12px;margin:10px 0}.sticky{position:fixed;bottom:0;left:0;right:0;background:#020617;border-top:4px solid #22c55e;padding:14px;display:flex;gap:14px;z-index:9999}.tv-wrap{margin:8px;background:#020617;border:2px solid #1e293b;border-radius:12px;overflow:hidden;display:none}.tv-wrap.show{display:block}#tvChart{width:100%;height:380px;border:none}</style>
 </head><body>
-<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V91 FIX ZERO MSG</b> <span style="color:#22c55e">Fix non arriva nulla - ora manda da 65% + blocco notte 01-05</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
+<div style="padding:12px;background:#020617;border-bottom:2px solid #22c55e;position:sticky;top:0;z-index:100"><b>V94 FIX BUGS</b> <span style="color:#22c55e">Fix scrittura codice VOL bias + CACHE + LAST_ENTRA + 60% + blocco notte</span> <a href="/app" style="float:right;color:#22c55e;border:1px solid #22c55e;padding:6px 12px;border-radius:20px;text-decoration:none">V71</a><div style="font-size:11px;color:#94a3b8">Telegram più preciso: solo segnali perfetti + Fix chiusi congelati + Liq TG</div></div>
 
 <div style="margin:8px;display:flex;gap:8px">
 <button onclick="toggleChart()" id="btnToggleChart" style="flex:1;padding:12px;border-radius:20px;background:#1e293b;color:#22c55e;border:2px solid #22c55e;font-weight:800">📈 Grafico</button>
